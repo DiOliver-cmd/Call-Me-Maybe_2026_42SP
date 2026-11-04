@@ -4,12 +4,23 @@ version = "0.1.0"
 description = "Constrained-decoding function calling over Qwen/Qwen3-0.6B"
 readme = "README.md"
 requires-python = ">=3.10"
+authors = [
+    { name = "dilferre (DiOliver-cmd)" },
+]
+maintainers = [
+    { name = "dilferre" },
+]
+
 dependencies = [
     "numpy>=1.26",
     "pydantic>=2.6",
     "llm-sdk",
     "torch>=2.0.0",
 ]
+
+[project.urls]
+GitHub = "https://github.com/DiOliver-cmd/Call-Me-Maybe_2026_42SP"
+Intra = "https://profile.intra.42.fr/users/dilferre"
 
 [dependency-groups]
 dev = [
