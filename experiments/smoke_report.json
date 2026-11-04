@@ -1,0 +1,23 @@
+{
+  "python": "3.13.1",
+  "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
+  "machine": "x86_64",
+  "load_s": 41.166,
+  "get_path_to_vocab_file": "~/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca/vocab.json",
+  "get_path_to_tokenizer_file": "~/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca/tokenizer.json",
+  "roundtrip": {
+    "hello": true,
+    "olá": true,
+    "{\"a\": 1}": true,
+    "name=\"shrek\"": true
+  },
+  "prompt_tokens": 11,
+  "logits_len": 151936,
+  "forward_times_s": [
+    2.13,
+    0.209,
+    0.194
+  ],
+  "forward_median_s": 0.209,
+  "logits_are_finite": true
+}
