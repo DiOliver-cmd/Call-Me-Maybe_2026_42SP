@@ -6,8 +6,16 @@ Function-calling tool with **constrained decoding** on top of `Qwen/Qwen3-0.6B`:
 the model proposes the next token, a DFA masks every token that would break the
 JSON grammar, and the pipeline writes one function call per user prompt.
 
-Status: repository bootstrap (setup milestone in progress). Full documentation
-is delivered in the `docs` milestone.
+Status: setup milestone complete (M0). The SDK public API is verified and the
+model runs locally on CPU; constrained decoding is the next step (M1–M5). Full
+documentation is delivered in the `docs` milestone.
+
+Baseline measured on the development machine (CPU, Python 3.13):
+
+- model load: 41.2 s on the first run (includes the Hugging Face download);
+- forward pass: 0.209 s median (3 runs, 11-token prompt);
+- vocabulary size: 151,936 tokens;
+- encode/decode round-trip lossless for ASCII, accented text, JSON and quotes.
 
 ## Layout
 
@@ -32,7 +40,7 @@ make clean     # remove caches and generated output
 
 | Milestone | Scope | Status |
 |-----------|-------|--------|
-| M0 — Setup | repository, uv, SDK smoke test, CI, board | in progress |
+| M0 — Setup | repository, uv, SDK smoke test, CI, board | done |
 | M1 — Contracts | Pydantic models, loaders, error policy | planned |
 | M2 — Vocabulary | tokenizer, `token_text`, indexes | planned |
 | M3 — LLM baseline | client, prompt, unconstrained measurement | planned |
