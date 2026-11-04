@@ -1,0 +1,44 @@
+[project]
+name = "call-me-maybe"
+version = "0.1.0"
+description = "Constrained-decoding function calling over Qwen/Qwen3-0.6B"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "pydantic>=2.6",
+    "llm-sdk",
+    "torch>=2.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "flake8>=7.0",
+    "mypy>=1.10",
+    "pytest>=8.0",
+]
+
+[tool.uv]
+# O projeto roda em CPU (modelo 0.6B). O índice abaixo evita baixar as
+# bibliotecas CUDA (~2.5 GB) que o wheel padrão do PyTorch arrasta.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+llm-sdk = { path = "llm_sdk", editable = true }
+torch = { index = "pytorch-cpu" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: testes que carregam o modelo real e demoram minutos",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+exclude = ["^llm_sdk/", "^GUIAS/"]

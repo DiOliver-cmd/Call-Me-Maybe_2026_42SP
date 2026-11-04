@@ -1,0 +1,191 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.10"
+
+jobs:
+  detect:
+    name: Detect project
+    runs-on: ubuntu-latest
+    outputs:
+      project: ${{ steps.check.outputs.project }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: check
+        shell: bash
+        run: |
+          if [ -f pyproject.toml ]; then
+            echo "project=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "project=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Sem projeto::pyproject.toml ainda não existe; lint e testes serão pulados."
+          fi
+
+  guards:
+    name: Repo guards
+    needs: detect
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Nenhum artefato gerado versionado
+        shell: bash
+        run: |
+          pattern='(^|/)(__pycache__|\.venv|data/output|\.mypy_cache|\.pytest_cache|\.ruff_cache)/|\.(pyc|pyo|whl|tar\.gz)$'
+          if git ls-files -z | tr '\0' '\n' | grep -Eq "$pattern"; then
+            echo "::error::Artefatos gerados estão versionados. Ajuste o .gitignore e remova-os do índice."
+            git ls-files -z | tr '\0' '\n' | grep -E "$pattern" | sed 's/^/  /'
+            exit 1
+          fi
+          echo "OK: nenhum artefato gerado versionado."
+
+      - name: JSONs de entrada válidos
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(data/input/*.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::notice title=Sem dados::data/input/*.json ainda não existe."
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            python3 -c 'import json,sys; json.load(open(sys.argv[1], encoding="utf-8"))' "$f" \
+              && echo "OK: $f" \
+              || { echo "::error file=$f::JSON inválido"; exit 1; }
+          done
+
+      - name: Estrutura mínima do mandatório
+        if: needs.detect.outputs.project == 'true'
+        shell: bash
+        run: |
+          missing=0
+          for f in pyproject.toml uv.lock README.md .gitignore; do
+            if [ ! -e "$f" ]; then
+              echo "::error::Arquivo obrigatório ausente: $f"
+              missing=1
+            fi
+          done
+          for f in Makefile src/__main__.py; do
+            if [ ! -e "$f" ]; then
+              echo "::warning title=Pendente::Arquivo ainda não criado: $f"
+            fi
+          done
+          exit $missing
+
+  lint:
+    name: Lint (flake8 + mypy)
+    needs: detect
+    if: needs.detect.outputs.project == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Instalar dependências
+        shell: bash
+        run: |
+          if [ -f uv.lock ]; then
+            uv sync --frozen --all-extras --dev
+          else
+            uv sync --all-extras --dev
+          fi
+
+      - name: flake8
+        shell: bash
+        run: |
+          uv run --with flake8 flake8 . \
+            --exclude=.venv,llm_sdk,build,dist,.git \
+            --max-line-length=100
+
+      - name: mypy
+        shell: bash
+        run: |
+          if find . -name '*.py' -not -path './.venv/*' -not -path './llm_sdk/*' | grep -q .; then
+            uv run --with mypy mypy . \
+              --ignore-missing-imports \
+              --warn-return-any \
+              --warn-unused-ignores
+          else
+            echo "::notice title=Sem codigo::nenhum arquivo .py ainda."
+          fi
+
+      - name: Compilação (sintaxe)
+        shell: bash
+        run: |
+          if find . -name '*.py' -not -path './.venv/*' -not -path './llm_sdk/*' | grep -q .; then
+            find . -name '*.py' -not -path './.venv/*' -not -path './llm_sdk/*' -print0 \
+              | xargs -0 uv run python -m py_compile
+          else
+            echo "::notice title=Sem codigo::nenhum arquivo .py ainda."
+          fi
+
+  test:
+    name: Tests (pytest)
+    needs: detect
+    if: needs.detect.outputs.project == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Instalar dependências
+        shell: bash
+        run: |
+          if [ -f uv.lock ]; then
+            uv sync --frozen --all-extras --dev
+          else
+            uv sync --all-extras --dev
+          fi
+
+      - name: pytest (sem testes lentos)
+        shell: bash
+        run: |
+          if find tests -name 'test_*.py' 2>/dev/null | grep -q .; then
+            uv run --with pytest pytest -q -m "not slow"
+          else
+            echo "::notice title=Sem tests::nenhum teste encontrado em tests/."
+          fi
+
+  status:
+    name: CI status
+    if: always()
+    needs: [guards, lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Agregar resultado
+        shell: bash
+        run: |
+          echo "guards=${{ needs.guards.result }}"
+          echo "lint=${{ needs.lint.result }}"
+          echo "test=${{ needs.test.result }}"
+          for r in "${{ needs.guards.result }}" "${{ needs.lint.result }}" "${{ needs.test.result }}"; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              echo "::error::CI falhou."
+              exit 1
+            fi
+          done
+          echo "CI ok."
