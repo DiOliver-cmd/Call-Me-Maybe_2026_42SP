@@ -12,6 +12,18 @@ repositório.
   docstrings em inglês** por padrão.
 - **README:** inglês, porque é exigência do subject da 42.
 
+## Processo de execução de task (obrigatório)
+
+Ao iniciar uma task, seguir o ciclo — **salvo pedido explícito do autor para
+pular etapa**:
+
+1. O agente fornece o **passo a passo** com comandos prontos e critérios de aceite.
+2. O autor **executa** e devolve a saída.
+3. O agente **explica** o arquivo criado e como ler o retorno.
+4. O agente **registra** a entrada em `GUIAS/DIARIO_DE_EXECUCAO.md`
+   (passo a passo, retorno, explicação, decisões).
+5. Commit/PR, evidência na issue e atualização do `README.md` no fim da sessão.
+
 ## Fluxo de trabalho
 
 - Uma pessoa, **WIP = 1**: só uma issue em `In Progress` por vez.

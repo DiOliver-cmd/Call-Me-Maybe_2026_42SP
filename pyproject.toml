@@ -53,3 +53,9 @@ warn_return_any = true
 warn_unused_ignores = true
 ignore_missing_imports = true
 exclude = ["^llm_sdk/", "^GUIAS/"]
+
+# The SDK ships without stubs; treat it as an untyped dependency instead of
+# trying to type-check third-party code we are not allowed to modify.
+[[tool.mypy.overrides]]
+module = ["llm_sdk", "llm_sdk.*"]
+follow_imports = "skip"
