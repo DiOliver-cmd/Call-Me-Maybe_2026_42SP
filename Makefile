@@ -12,13 +12,6 @@ PYTHON ?= $(UV) run python
 FLAKE8 ?= $(UV) run flake8
 MYPY ?= $(UV) run mypy
 
-# Caminhos que fazem parte da estrutura e NÃO devem ser removidos pelo clean.
-# Qualquer outro diretório vazio (inclusive aninhado) é considerado resíduo.
-KEEP := ! -path './.git' ! -path './.git/*' ! -path './.github' ! -path './.github/*' \
-        ! -path './src' ! -path './tests' ! -path './experiments' \
-        ! -path './data' ! -path './data/input' \
-        ! -path './llm_sdk' ! -path './GUIAS' ! -path './Material_base'
-
 .PHONY: help uv install run debug test test-all clean lint lint-strict
 
 help:
@@ -31,7 +24,7 @@ help:
 	@echo "  test-all     todos os testes, inclusive os marcados como slow"
 	@echo "  lint         flake8 + mypy no projeto"
 	@echo "  lint-strict  flake8 + mypy --strict"
-	@echo "  clean        remove caches, artefatos e diretórios gerados fora da raiz"
+	@echo "  clean        remove a saída gerada e caches (mantém .venv e fontes)"
 
 # Instala o uv no diretório do usuário (sem sudo) quando ele não está
 # disponível no PATH. Idempotente: se já existe, apenas mostra a versão.
@@ -87,21 +80,13 @@ lint-strict:
 	fi
 
 clean:
-	@echo "Removendo caches e artefatos gerados..."
-	@find . -type d -name '__pycache__' -prune -exec rm -rf {} +
-	@find . -type d \( -name '.pytest_cache' -o -name '.mypy_cache' \
-		-o -name '.ruff_cache' -o -name '.hypothesis' \) -prune -exec rm -rf {} +
-	@rm -rf data/output build dist .venv venv .coverage .coverage.* htmlcov
-	@find . -type d -name '*.egg-info' -prune -exec rm -rf {} +
-	@find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
-	@# Remove diretórios de topo que não pertencem à estrutura do projeto
-	@# (qualquer resíduo criado fora da raiz esperada).
-	@find . -mindepth 1 -maxdepth 1 -type d \
-		! -name '.git' ! -name '.github' \
-		! -name 'src' ! -name 'tests' ! -name 'experiments' \
-		! -name 'data' ! -name 'llm_sdk' ! -name 'GUIAS' \
-		! -name 'Material_base' ! -name 'docs' \
-		-exec rm -rf {} +
-	@# Remove qualquer diretório vazio (aninhado) que não pertença à estrutura.
-	@find . -mindepth 1 -type d -empty $(KEEP) -delete
-	@echo "OK: limpeza concluída."
+	@echo "Removendo saída gerada e caches..."
+	@rm -rf data/output build dist htmlcov .coverage .coverage.*
+	@rm -rf .pytest_cache .mypy_cache .ruff_cache .hypothesis
+	@find . \( -path './.venv' -o -path './.git' \) -prune -o \
+		-type d -name '__pycache__' -exec rm -rf {} +
+	@find . \( -path './.venv' -o -path './.git' \) -prune -o \
+		-type f \( -name '*.pyc' -o -name '*.pyo' \) -exec rm -f {} +
+	@find . \( -path './.venv' -o -path './.git' \) -prune -o \
+		-type d -name '*.egg-info' -exec rm -rf {} +
+	@echo "OK: limpeza concluída (o .venv foi preservado)."
