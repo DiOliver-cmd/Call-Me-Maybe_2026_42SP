@@ -1,0 +1,105 @@
+"""Unit tests for the input-side schema models (T1.1)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
+
+from src.schemas import FunctionCatalog
+
+DATA_FILE = (
+    Path(__file__).resolve().parents[1]
+    / "data"
+    / "input"
+    / "functions_definition.json"
+)
+
+
+def _load_real_catalog() -> list[dict[str, Any]]:
+    with DATA_FILE.open(encoding="utf-8") as handle:
+        data: list[dict[str, Any]] = json.load(handle)
+    return data
+
+
+def _minimal_function() -> dict[str, Any]:
+    return {
+        "name": "fn_echo",
+        "description": "Echo a value back to the caller.",
+        "returns": {"type": "string"},
+    }
+
+
+def test_real_catalog_validates() -> None:
+    catalog = FunctionCatalog.model_validate(_load_real_catalog())
+
+    assert len(catalog) == 5
+    names = [function.name for function in catalog]
+    assert "fn_add_numbers" in names
+    assert "fn_greet" in names
+    assert catalog.by_name("fn_greet").parameters["name"].type == "string"
+
+
+def test_minimal_function_schema_validates() -> None:
+    catalog = FunctionCatalog.model_validate([_minimal_function()])
+
+    function = catalog.by_name("fn_echo")
+    assert function.parameters == {}
+    assert function.returns.type == "string"
+
+
+def test_duplicate_function_name_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="fn_echo"):
+        FunctionCatalog.model_validate([_minimal_function(), _minimal_function()])
+
+
+@pytest.mark.parametrize("missing", ["name", "description", "returns"])
+def test_missing_required_field_is_rejected(missing: str) -> None:
+    raw = _minimal_function()
+    raw.pop(missing)
+
+    with pytest.raises(ValidationError):
+        FunctionCatalog.model_validate([raw])
+
+
+def test_unknown_parameter_type_is_rejected() -> None:
+    raw = _minimal_function()
+    raw["parameters"] = {"items": {"type": "array"}}
+
+    with pytest.raises(ValidationError, match="supported types"):
+        FunctionCatalog.model_validate([raw])
+
+
+def test_extra_unknown_field_is_rejected() -> None:
+    raw = _minimal_function()
+    raw["unexpected"] = True
+
+    with pytest.raises(ValidationError):
+        FunctionCatalog.model_validate([raw])
+
+
+def test_blank_function_name_is_rejected() -> None:
+    raw = _minimal_function()
+    raw["name"] = "   "
+
+    with pytest.raises(ValidationError, match="must not be empty"):
+        FunctionCatalog.model_validate([raw])
+
+
+def test_function_name_is_stripped() -> None:
+    raw = _minimal_function()
+    raw["name"] = "  fn_echo  "
+
+    catalog = FunctionCatalog.model_validate([raw])
+
+    assert catalog.by_name("fn_echo").name == "fn_echo"
+
+
+def test_unknown_function_lookup_raises_key_error() -> None:
+    catalog = FunctionCatalog.model_validate([_minimal_function()])
+
+    with pytest.raises(KeyError, match="fn_missing"):
+        catalog.by_name("fn_missing")
