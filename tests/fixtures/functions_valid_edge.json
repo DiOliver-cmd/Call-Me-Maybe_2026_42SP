@@ -1,0 +1,80 @@
+[
+  {
+    "name": "fn_translate_text",
+    "description": "Translate a piece of text into a target language.",
+    "parameters": {
+      "text": {
+        "type": "string"
+      },
+      "target_language": {
+        "type": "string"
+      }
+    },
+    "returns": {
+      "type": "string"
+    }
+  },
+  {
+    "name": "fn_apply_discount",
+    "description": "Apply a percentage discount to a price.",
+    "parameters": {
+      "price": {
+        "type": "number"
+      },
+      "percent": {
+        "type": "number"
+      }
+    },
+    "returns": {
+      "type": "number"
+    }
+  },
+  {
+    "name": "fn_toggle_feature",
+    "description": "Enable or disable a feature flag.",
+    "parameters": {
+      "feature": {
+        "type": "string"
+      },
+      "enabled": {
+        "type": "boolean"
+      }
+    },
+    "returns": {
+      "type": "boolean"
+    }
+  },
+  {
+    "name": "fn_resize_image",
+    "description": "Resize an image to an exact pixel size.",
+    "parameters": {
+      "width": {
+        "type": "integer"
+      },
+      "height": {
+        "type": "integer"
+      }
+    },
+    "returns": {
+      "type": "boolean"
+    }
+  },
+  {
+    "name": "fn_schedule_meeting",
+    "description": "Schedule a meeting with a title, day of month and urgency flag.",
+    "parameters": {
+      "title": {
+        "type": "string"
+      },
+      "day": {
+        "type": "integer"
+      },
+      "urgent": {
+        "type": "boolean"
+      }
+    },
+    "returns": {
+      "type": "string"
+    }
+  }
+]

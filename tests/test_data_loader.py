@@ -37,13 +37,13 @@ def test_load_real_functions() -> None:
     catalog = load_functions(FUNCTIONS_FILE)
 
     assert isinstance(catalog, FunctionCatalog)
-    assert len(catalog) == 5
+    assert len(catalog) == 6
 
 
 def test_load_real_prompts() -> None:
     prompts = load_prompts(PROMPTS_FILE)
 
-    assert len(prompts) == 11
+    assert len(prompts) == 17
     assert prompts[0] == "What is the sum of 2 and 3?"
 
 

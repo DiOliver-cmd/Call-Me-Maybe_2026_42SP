@@ -31,5 +31,23 @@
   },
   {
     "prompt": "Substitute the word 'cat' with 'dog' in 'The cat sat on the mat with another cat'"
+  },
+  {
+    "prompt": "Turn the alarm on."
+  },
+  {
+    "prompt": "Disable the alarm before midnight."
+  },
+  {
+    "prompt": "What is the sum of -12 and 7?"
+  },
+  {
+    "prompt": "Reverse the string 'olá, mundo — \"42\"'"
+  },
+  {
+    "prompt": "Replace every digit in 'Room 101, floor 2' with '#'"
+  },
+  {
+    "prompt": "Do the useful thing with 42 and 'banana'."
   }
 ]

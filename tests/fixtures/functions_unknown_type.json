@@ -1,0 +1,14 @@
+[
+  {
+    "name": "fn_list_items",
+    "description": "List items, using an array type the grammar cannot represent.",
+    "parameters": {
+      "items": {
+        "type": "array"
+      }
+    },
+    "returns": {
+      "type": "string"
+    }
+  }
+]

@@ -1,0 +1,7 @@
+[
+  {
+    "name": "fn_missing_returns",
+    "description": "This declaration is missing its required returns field.",
+    "parameters": {}
+  }
+]
