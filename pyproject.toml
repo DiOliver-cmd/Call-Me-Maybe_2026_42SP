@@ -43,6 +43,9 @@ torch = { index = "pytorch-cpu" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Make the repository root importable so `pytest` (and `uv run pytest`) can
+# import the `src` package without installing the project.
+pythonpath = ["."]
 markers = [
     "slow: testes que carregam o modelo real e demoram minutos",
 ]

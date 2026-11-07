@@ -30,8 +30,11 @@ llm_sdk/        provided LLM SDK (do not modify)
 ## Quick start
 
 ```bash
+make uv        # install uv in ~/.local/bin when missing (no sudo)
 make install   # uv sync
 make run       # uv run python -m src
+make test      # pytest -q -m "not slow"
+make test-all  # full suite, including slow/model-backed tests
 make lint      # flake8 + mypy
 make clean     # remove caches and generated output
 ```
