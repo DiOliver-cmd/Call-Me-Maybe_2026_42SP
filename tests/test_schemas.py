@@ -36,10 +36,11 @@ def _minimal_function() -> dict[str, Any]:
 def test_real_catalog_validates() -> None:
     catalog = FunctionCatalog.model_validate(_load_real_catalog())
 
-    assert len(catalog) == 5
+    assert len(catalog) == 6
     names = [function.name for function in catalog]
     assert "fn_add_numbers" in names
     assert "fn_greet" in names
+    assert "fn_set_alarm" in names
     assert catalog.by_name("fn_greet").parameters["name"].type == "string"
 
 

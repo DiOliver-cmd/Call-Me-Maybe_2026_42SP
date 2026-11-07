@@ -1,0 +1,14 @@
+[
+  {
+    "prompt": "What is the sum of -12 and -7?"
+  },
+  {
+    "prompt": "Translate 'olá, mundo — \"42\"' into English."
+  },
+  {
+    "prompt": "Disable the feature flag for dark mode."
+  },
+  {
+    "prompt": "Handle the thing with 42 and 'banana'."
+  }
+]
