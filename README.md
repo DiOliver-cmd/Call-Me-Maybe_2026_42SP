@@ -6,9 +6,10 @@ Function-calling tool with **constrained decoding** on top of `Qwen/Qwen3-0.6B`:
 the model proposes the next token, a DFA masks every token that would break the
 JSON grammar, and the pipeline writes one function call per user prompt.
 
-Status: setup milestone complete (M0). The SDK public API is verified and the
-model runs locally on CPU; constrained decoding is the next step (M1–M5). Full
-documentation is delivered in the `docs` milestone.
+Status: M0 complete. M1 (contracts) in progress: the input catalog and the output
+call models are defined and validated with Pydantic. The SDK public API is
+verified and the model runs locally on CPU; constrained decoding is the next
+step (M2–M5). Full documentation is delivered in the `docs` milestone.
 
 Baseline measured on the development machine (CPU, Python 3.13):
 
