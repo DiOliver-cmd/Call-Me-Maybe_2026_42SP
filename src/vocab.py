@@ -18,6 +18,14 @@ exposed by the logits vector but absent from the tokenizer are padding positions
 and are reported by :func:`unmapped_token_ids`. Byte-level fragment tokens must
 stay allowed even when a per-id ``decode`` is lossy (returns ``U+FFFD``): they
 are needed to assemble multi-byte characters.
+
+Lookup strategy: :class:`TokenizerIndex` groups allowed tokens by their first
+decoded character, narrowing ~151k ids to a few thousand before the full
+``str.startswith`` check. Byte-level fragments stay in the index (keyed on
+``U+FFFD`` when the per-id decode is lossy) because the decoder needs them to
+assemble UTF-8. The ``(state_id, token_id) -> next_state_id`` transition cache is
+deferred: it needs DFA state ids, which do not exist until T4; revisit it in
+T8.3 profiling.
 """
 
 from __future__ import annotations
@@ -29,6 +37,22 @@ from pathlib import Path
 from typing import Any
 
 from src.errors import ModelError
+
+__all__ = [
+    "PathLike",
+    "TokenizerIndex",
+    "TokenizerVocab",
+    "build_token_index",
+    "build_token_text_via_decode",
+    "excluded_token_ids",
+    "load_token_text_cache",
+    "parse_tokenizer_json",
+    "parse_vocab_json",
+    "save_token_text_cache",
+    "special_token_ids",
+    "unmapped_token_ids",
+    "validate_token_text",
+]
 
 # Public helpers accept either a string or a ``pathlib.Path``.
 PathLike = str | Path
@@ -54,6 +78,41 @@ class TokenizerVocab:
     def vocab_size(self) -> int:
         """Number of token entries in the mapping."""
         return len(self.token_text)
+
+
+@dataclass(frozen=True)
+class TokenizerIndex:
+    """First-character index over the tokens allowed in decoded JSON text.
+
+    Attributes:
+        texts: Id -> token text for every mapped id (including control tokens
+            that ``allowed_ids`` then removes).
+        allowed_ids: Sorted ids that may be emitted: mapped ids minus every
+            added control token.
+        by_first_char: First character -> sorted allowed ids. Tokens whose text
+            is empty are skipped; lossy byte-level fragments are keyed on
+            ``U+FFFD`` because that is the first character of their per-id
+            ``decode``.
+    """
+
+    texts: dict[int, str]
+    allowed_ids: tuple[int, ...]
+    by_first_char: dict[str, tuple[int, ...]]
+
+    def tokens_starting_with(self, prefix: str) -> tuple[int, ...]:
+        """Return sorted allowed ids whose text starts with ``prefix``.
+
+        An empty prefix returns every allowed id. Otherwise the first-character
+        bucket narrows the search before the full ``startswith`` check.
+        """
+        if prefix == "":
+            return self.allowed_ids
+        candidates = self.by_first_char.get(prefix[0], ())
+        return tuple(
+            token_id
+            for token_id in candidates
+            if self.texts[token_id].startswith(prefix)
+        )
 
 
 def _load_json(path: Path) -> Any:
@@ -343,7 +402,7 @@ def load_token_text_cache(path: PathLike) -> dict[int, str]:
 
 
 def special_token_ids(tokenizer: TokenizerVocab) -> frozenset[int]:
-    """Return the ids the tokenizer declares as special/added tokens."""
+    """Return the ids whose ``added_tokens`` entry has ``special=true``."""
     return tokenizer.special_ids
 
 
@@ -362,6 +421,54 @@ def excluded_token_ids(tokenizer: TokenizerVocab) -> frozenset[int]:
     characters.
     """
     return tokenizer.added_ids
+
+
+def build_token_index(
+    tokenizer: TokenizerVocab,
+    texts: Mapping[int, str] | None = None,
+) -> TokenizerIndex:
+    """Build the first-character index for the decoder's allowed token set.
+
+    ``texts`` defaults to ``tokenizer.token_text`` (raw BPE strings). Pass the
+    decoded ``token_text`` produced by :func:`build_token_text_via_decode` when
+    indexing real model output, so ``"Ġ"`` entries become spaces and lossy
+    byte-level fragments key on ``U+FFFD``. Only ids present in ``texts`` are
+    indexed; every added control token is removed from ``allowed_ids``.
+
+    Complexity is O(vocab) to build. The strategy is to narrow ~151k ids by
+    first character before running the string prefix check, keeping byte-level
+    fragments available for UTF-8 assembly. The DFA transition cache is
+    deferred until state ids exist (T4/T8.3).
+    """
+    index_texts = {
+        token_id: text
+        for token_id, text in (
+            tokenizer.token_text if texts is None else texts
+        ).items()
+        if token_id in tokenizer.token_text
+    }
+    excluded = excluded_token_ids(tokenizer)
+    allowed_ids = tuple(
+        token_id
+        for token_id in sorted(index_texts)
+        if token_id not in excluded
+    )
+
+    buckets: dict[str, list[int]] = {}
+    for token_id in allowed_ids:
+        text = index_texts[token_id]
+        if not text:
+            continue
+        buckets.setdefault(text[0], []).append(token_id)
+
+    by_first_char = {
+        char: tuple(token_ids) for char, token_ids in buckets.items()
+    }
+    return TokenizerIndex(
+        texts=index_texts,
+        allowed_ids=allowed_ids,
+        by_first_char=by_first_char,
+    )
 
 
 def unmapped_token_ids(
