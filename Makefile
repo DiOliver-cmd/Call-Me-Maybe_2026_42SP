@@ -58,9 +58,10 @@ debug:
 test:
 	$(UV) run pytest -q -m "not slow"
 
-# Inclui tudo, inclusive integração com o modelo real.
+# Inclui tudo, inclusive integração com o modelo real. Saída verbosa:
+# um linha por teste (`arquivo::teste PASSED [ xx%]`).
 test-all:
-	$(UV) run pytest -q
+	$(UV) run pytest -v
 
 # mypy falha com exit 2 quando não há nenhum .py (fase inicial do projeto).
 lint:
