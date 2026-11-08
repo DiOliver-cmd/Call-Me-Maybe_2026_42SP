@@ -1,4 +1,4 @@
-"""Fixture-driven tests for the JSON loaders (T1.4)."""
+"""Fixture-driven tests for the JSON loaders (T1.4, T1.5)."""
 
 from __future__ import annotations
 
@@ -6,17 +6,20 @@ from pathlib import Path
 
 import pytest
 
-from src.data_loader import DataLoadError, load_functions, load_prompts
+from src.data_loader import load_functions, load_prompts
+from src.errors import InputError, ProjectError, SchemaError
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
 
-def _assert_data_load_error(
-    excinfo: pytest.ExceptionInfo[DataLoadError],
+def _assert_project_error(
+    excinfo: pytest.ExceptionInfo[ProjectError],
+    expected_type: type[ProjectError],
     *fragments: str,
 ) -> None:
-    """Assert the error is exactly ``DataLoadError`` and contains ``fragments``."""
-    assert type(excinfo.value) is DataLoadError
+    """Assert the exact error type and that the message contains ``fragments``."""
+    assert issubclass(expected_type, ProjectError)
+    assert type(excinfo.value) is expected_type
     message = str(excinfo.value)
     for fragment in fragments:
         assert fragment in message
@@ -47,46 +50,48 @@ def test_valid_prompts_fixture_preserves_order_and_unicode() -> None:
 
 
 @pytest.mark.parametrize(
-    ("filename", "fragments"),
+    ("filename", "expected_type", "fragments"),
     [
-        ("functions_empty.json", ("at least one function",)),
-        ("functions_unknown_type.json", ("unsupported parameter type",)),
-        ("functions_duplicate_name.json", ("duplicate",)),
-        ("functions_missing_field.json", ("invalid function catalog",)),
-        ("functions_root_object.json", ("invalid function catalog",)),
-        ("functions_broken.json", ("invalid JSON", "line")),
+        ("functions_empty.json", InputError, ("at least one function",)),
+        ("functions_unknown_type.json", SchemaError, ("unsupported parameter type",)),
+        ("functions_duplicate_name.json", SchemaError, ("duplicate",)),
+        ("functions_missing_field.json", SchemaError, ("invalid function catalog",)),
+        ("functions_root_object.json", SchemaError, ("invalid function catalog",)),
+        ("functions_broken.json", InputError, ("invalid JSON", "line")),
     ],
 )
-def test_invalid_functions_fixtures_raise_data_load_error(
+def test_invalid_functions_fixtures_raise_project_error(
     filename: str,
+    expected_type: type[ProjectError],
     fragments: tuple[str, ...],
 ) -> None:
     path = FIXTURES_DIR / filename
 
-    with pytest.raises(DataLoadError) as excinfo:
+    with pytest.raises(ProjectError) as excinfo:
         load_functions(path)
 
-    _assert_data_load_error(excinfo, *fragments)
+    _assert_project_error(excinfo, expected_type, *fragments)
 
 
 @pytest.mark.parametrize(
-    ("filename", "fragments"),
+    ("filename", "expected_type", "fragments"),
     [
-        ("prompts_empty.json", ("at least one prompt",)),
-        ("prompts_not_list.json", ("expected a JSON list",)),
-        ("prompts_missing_key.json", ("index 1", "missing")),
-        ("prompts_blank.json", ("blank",)),
-        ("prompts_not_object.json", ("index 0", "must be an object")),
-        ("prompts_broken.json", ("invalid JSON",)),
+        ("prompts_empty.json", InputError, ("at least one prompt",)),
+        ("prompts_not_list.json", SchemaError, ("expected a JSON list",)),
+        ("prompts_missing_key.json", SchemaError, ("index 1", "missing")),
+        ("prompts_blank.json", InputError, ("blank",)),
+        ("prompts_not_object.json", SchemaError, ("index 0", "must be an object")),
+        ("prompts_broken.json", InputError, ("invalid JSON",)),
     ],
 )
-def test_invalid_prompts_fixtures_raise_data_load_error(
+def test_invalid_prompts_fixtures_raise_project_error(
     filename: str,
+    expected_type: type[ProjectError],
     fragments: tuple[str, ...],
 ) -> None:
     path = FIXTURES_DIR / filename
 
-    with pytest.raises(DataLoadError) as excinfo:
+    with pytest.raises(ProjectError) as excinfo:
         load_prompts(path)
 
-    _assert_data_load_error(excinfo, *fragments)
+    _assert_project_error(excinfo, expected_type, *fragments)
