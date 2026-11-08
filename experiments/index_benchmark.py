@@ -53,12 +53,15 @@ CONSTRAINTS = (
 
 
 def _load_texts(model: Any, tokenizer: TokenizerVocab) -> dict[int, str]:
-    """Reuse the decoded cache when it covers every id, else rebuild it."""
+    """Load a fully covered cache, building and saving it when absent."""
     ids = sorted(tokenizer.token_text)
+    # Id-range size: validation rejects missing or out-of-range ids.
+    expected_size = ids[-1] + 1 if ids else None
     if CACHE_PATH.exists():
-        cached = load_token_text_cache(CACHE_PATH)
-        if set(cached) >= set(ids):
-            return cached
+        return load_token_text_cache(
+            CACHE_PATH,
+            expected_size=expected_size,
+        )
     texts = build_token_text_via_decode(model, ids)
     save_token_text_cache(CACHE_PATH, texts)
     return texts

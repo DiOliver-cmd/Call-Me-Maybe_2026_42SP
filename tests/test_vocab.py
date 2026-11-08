@@ -25,7 +25,39 @@ from src.vocab import (
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 TOKENIZER_FIXTURE = FIXTURES_DIR / "tokenizer_mini.json"
+TOKENIZER_CHARS_FIXTURE = FIXTURES_DIR / "tokenizer_chars.json"
 VOCAB_FIXTURE = FIXTURES_DIR / "vocab_mini.json"
+
+# Raw one-character vocabulary used by tokenizer_chars.json.
+CHARS_RAW_TO_ID = {
+    "{": 0,
+    "}": 1,
+    "[": 2,
+    "]": 3,
+    '"': 4,
+    ":": 5,
+    ",": 6,
+    "0": 7,
+    "1": 8,
+    "a": 9,
+    "b": 10,
+    "Ġ": 11,
+    "Ċ": 12,
+}
+CHARS_ADDED_IDS = frozenset({13, 14})
+
+
+def _chars_id_to_decoded() -> dict[int, str]:
+    """Map each artificial 1-char token id to the text the decoder sees."""
+    mapping: dict[int, str] = {}
+    for raw, token_id in CHARS_RAW_TO_ID.items():
+        if raw == "Ġ":
+            mapping[token_id] = " "
+        elif raw == "Ċ":
+            mapping[token_id] = "\n"
+        else:
+            mapping[token_id] = raw
+    return mapping
 
 
 def _assert_model_error(
@@ -317,3 +349,153 @@ def test_build_token_index_keys_byte_fragments_on_replacement_char() -> None:
 
     assert index.texts[3] == "\ufffd"
     assert index.by_first_char["\ufffd"] == (3,)
+
+
+def test_artificial_single_char_tokenizer_and_index() -> None:
+    tokenizer = parse_tokenizer_json(TOKENIZER_CHARS_FIXTURE)
+
+    expected_vocab = {
+        token_id: raw for raw, token_id in CHARS_RAW_TO_ID.items()
+    }
+    expected_vocab[13] = "<|special|>"
+    expected_vocab[14] = "<tool_call>"
+    assert tokenizer.token_text == expected_vocab
+    assert tokenizer.special_ids == frozenset({13})
+    assert tokenizer.added_ids == CHARS_ADDED_IDS
+
+    index = build_token_index(tokenizer)
+    assert index.allowed_ids == tuple(range(13))
+    assert index.by_first_char == {
+        raw: (token_id,) for raw, token_id in CHARS_RAW_TO_ID.items()
+    }
+    for char in ("{", "}", "[", "]", '"', ":", ",", "0", "a", "Ġ", "Ċ"):
+        assert index.tokens_starting_with(char) == (CHARS_RAW_TO_ID[char],)
+
+    allowed = set(index.allowed_ids)
+    assert CHARS_ADDED_IDS.isdisjoint(allowed)
+    assert CHARS_ADDED_IDS.isdisjoint(index.tokens_starting_with(""))
+    assert index.tokens_starting_with("") == index.allowed_ids
+
+
+def test_artificial_index_decoded_space_and_newline() -> None:
+    tokenizer = parse_tokenizer_json(TOKENIZER_CHARS_FIXTURE)
+    raw_index = build_token_index(tokenizer)
+    # Raw BPE text uses placeholders, so a literal space/newline finds nothing.
+    assert raw_index.tokens_starting_with(" ") == ()
+    assert raw_index.tokens_starting_with("\n") == ()
+
+    decoded = dict(tokenizer.token_text)
+    decoded[CHARS_RAW_TO_ID["Ġ"]] = " "
+    decoded[CHARS_RAW_TO_ID["Ċ"]] = "\n"
+    index = build_token_index(tokenizer, texts=decoded)
+
+    assert index.tokens_starting_with(" ") == (CHARS_RAW_TO_ID["Ġ"],)
+    assert index.tokens_starting_with("\n") == (CHARS_RAW_TO_ID["Ċ"],)
+    assert index.by_first_char[" "] == (CHARS_RAW_TO_ID["Ġ"],)
+    assert index.by_first_char["\n"] == (CHARS_RAW_TO_ID["Ċ"],)
+
+
+def test_artificial_encode_decode_round_trip_for_json() -> None:
+    id_to_decoded = _chars_id_to_decoded()
+    decoded_to_id = {
+        text: token_id for token_id, text in id_to_decoded.items()
+    }
+    assert len(decoded_to_id) == len(CHARS_RAW_TO_ID)
+
+    text = '{"a": 1}'
+    ids = [decoded_to_id[char] for char in text]
+
+    assert "".join(id_to_decoded[token_id] for token_id in ids) == text
+
+
+@pytest.fixture(scope="module")
+def real_model() -> Any:
+    """Instantiate the real SDK model once for the slow round-trip tests."""
+    from llm_sdk import Small_LLM_Model
+
+    return Small_LLM_Model()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("text", ['{"a": 1}', '"hello"', '"olá"'])
+def test_real_model_encode_decode_round_trip(
+    real_model: Any,
+    text: str,
+) -> None:
+    # encode() returns a 2-D tensor and decode() calls .tolist() on it, which
+    # yields a nested list; flatten the batch dimension before decoding.
+    ids = real_model.encode(text)[0]
+    assert real_model.decode(ids) == text
+
+
+def test_load_token_text_cache_rejects_negative_id(tmp_path: Path) -> None:
+    path = tmp_path / "cache.json"
+    path.write_text(json.dumps({"-1": "x"}), encoding="utf-8")
+
+    with pytest.raises(ModelError) as excinfo:
+        load_token_text_cache(path)
+
+    _assert_model_error(excinfo, str(path), "non-negative integer string")
+
+
+def test_load_token_text_cache_with_expected_size_rejects_out_of_range(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "cache.json"
+    path.write_text(json.dumps({"0": "a", "3": "d"}), encoding="utf-8")
+
+    with pytest.raises(ModelError) as excinfo:
+        load_token_text_cache(path, expected_size=3)
+
+    _assert_model_error(excinfo, "outside", "3")
+
+
+def test_load_token_text_cache_with_expected_size_accepts_complete_cache(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "cache.json"
+    path.write_text(
+        json.dumps({"0": "a", "1": "b", "2": "c"}),
+        encoding="utf-8",
+    )
+
+    assert load_token_text_cache(path, expected_size=3) == {
+        0: "a",
+        1: "b",
+        2: "c",
+    }
+
+
+def test_out_of_range_cache_id_is_rejected_by_validate_token_text(
+    tmp_path: Path,
+) -> None:
+    # The cache loader checks key shape only; validate_token_text enforces range.
+    path = tmp_path / "cache.json"
+    path.write_text(json.dumps({"0": "a", "3": "d"}), encoding="utf-8")
+    loaded = load_token_text_cache(path)
+
+    with pytest.raises(ModelError) as excinfo:
+        validate_token_text(loaded, 3)
+
+    _assert_model_error(excinfo, "outside", "3")
+
+
+def test_validate_token_text_rejects_max_id_equal_to_size() -> None:
+    # Off-by-one: id 3 is the first id outside range(3).
+    with pytest.raises(ModelError) as excinfo:
+        validate_token_text({0: "a", 3: "d"}, 3)
+
+    _assert_model_error(excinfo, "outside", "range(3)", "3")
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    [TOKENIZER_FIXTURE, TOKENIZER_CHARS_FIXTURE],
+)
+def test_index_allowed_ids_exclude_added_tokens(fixture: Path) -> None:
+    tokenizer = parse_tokenizer_json(fixture)
+    index = build_token_index(tokenizer)
+    excluded = set(excluded_token_ids(tokenizer))
+
+    assert set(index.allowed_ids) & excluded == set()
+    assert set(index.tokens_starting_with("")) & excluded == set()
