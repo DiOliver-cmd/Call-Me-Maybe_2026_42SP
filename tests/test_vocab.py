@@ -12,11 +12,13 @@ from src.errors import ModelError, ProjectError
 from src.vocab import (
     TokenizerVocab,
     build_token_text_via_decode,
+    excluded_token_ids,
     load_token_text_cache,
     parse_tokenizer_json,
     parse_vocab_json,
     save_token_text_cache,
     special_token_ids,
+    unmapped_token_ids,
     validate_token_text,
 )
 
@@ -58,10 +60,12 @@ def test_parse_tokenizer_json_reads_vocab_and_added_tokens() -> None:
         2: ":",
         3: "world",
         4: "<|special|>",
+        5: "<tool_call>",
     }
     assert result.special_ids == frozenset({2, 4})
+    assert result.added_ids == frozenset({2, 4, 5})
     assert special_token_ids(result) == frozenset({2, 4})
-    assert result.vocab_size == 5
+    assert result.vocab_size == 6
     assert str(TOKENIZER_FIXTURE) in result.source
     assert "tokenizer.json" in result.source
 
@@ -90,6 +94,7 @@ def test_parse_vocab_json_fallback() -> None:
 
     assert result.token_text == {0: "hello", 1: "Ġworld", 2: ":"}
     assert result.special_ids == frozenset()
+    assert result.added_ids == frozenset()
     assert special_token_ids(result) == frozenset()
     assert str(VOCAB_FIXTURE) in result.source
     assert "vocab.json" in result.source
@@ -212,3 +217,42 @@ def test_load_token_text_cache_wrong_shape_raises(
         load_token_text_cache(path)
 
     _assert_model_error(excinfo, str(path))
+
+
+def test_excluded_token_ids_covers_all_added_tokens() -> None:
+    tokenizer = parse_tokenizer_json(TOKENIZER_FIXTURE)
+
+    assert excluded_token_ids(tokenizer) == tokenizer.added_ids
+    assert excluded_token_ids(tokenizer) == frozenset({2, 4, 5})
+
+
+def test_excluded_token_ids_includes_non_special_added_marker() -> None:
+    tokenizer = parse_tokenizer_json(TOKENIZER_FIXTURE)
+
+    # Id 5 is added with special=false, but it is still a control marker.
+    assert 5 in tokenizer.added_ids
+    assert 5 not in tokenizer.special_ids
+    assert 5 in excluded_token_ids(tokenizer)
+
+
+def test_unmapped_token_ids_reports_padding_positions() -> None:
+    tokenizer = parse_tokenizer_json(TOKENIZER_FIXTURE)
+
+    # The fixture covers ids 0..5, so 6..7 are logits-only padding positions.
+    assert unmapped_token_ids(tokenizer, 8) == frozenset({6, 7})
+
+
+def test_unmapped_token_ids_empty_when_logits_match_vocab() -> None:
+    tokenizer = parse_tokenizer_json(TOKENIZER_FIXTURE)
+
+    assert unmapped_token_ids(tokenizer, 6) == frozenset()
+
+
+@pytest.mark.parametrize("logits_size", [0, -1])
+def test_unmapped_token_ids_rejects_non_positive_size(logits_size: int) -> None:
+    tokenizer = parse_tokenizer_json(TOKENIZER_FIXTURE)
+
+    with pytest.raises(ModelError) as excinfo:
+        unmapped_token_ids(tokenizer, logits_size)
+
+    _assert_model_error(excinfo, "logits_size")
