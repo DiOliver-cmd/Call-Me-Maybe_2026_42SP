@@ -6,10 +6,11 @@ Function-calling tool with **constrained decoding** on top of `Qwen/Qwen3-0.6B`:
 the model proposes the next token, a DFA masks every token that would break the
 JSON grammar, and the pipeline writes one function call per user prompt.
 
-Status: M0 complete. M1 (contracts) in progress: the input catalog and the output
-call models are defined and validated with Pydantic. The SDK public API is
-verified and the model runs locally on CPU; constrained decoding is the next
-step (M2–M5). Full documentation is delivered in the `docs` milestone.
+Status: M0 and M1 complete. The input catalog, the output call models, the JSON
+loaders and the project-wide error policy are defined and validated with Pydantic
+(75 tests). The SDK public API is verified and the model runs locally on CPU;
+constrained decoding is the next step (M2–M5). Full documentation is delivered in
+the `docs` milestone.
 
 Baseline measured on the development machine (CPU, Python 3.13):
 
@@ -45,7 +46,7 @@ make clean     # remove caches and generated output
 | Milestone | Scope | Status |
 |-----------|-------|--------|
 | M0 — Setup | repository, uv, SDK smoke test, CI, board | done |
-| M1 — Contracts | Pydantic models, loaders, error policy | planned |
+| M1 — Contracts | Pydantic models, loaders, error policy | done |
 | M2 — Vocabulary | tokenizer, `token_text`, indexes | planned |
 | M3 — LLM baseline | client, prompt, unconstrained measurement | planned |
 | M4 — Grammar/DFA | states, slots, transitions | planned |
