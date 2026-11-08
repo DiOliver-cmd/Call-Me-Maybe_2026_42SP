@@ -8,10 +8,13 @@ JSON grammar, and the pipeline writes one function call per user prompt.
 
 Status: M0 and M1 complete; M2 (vocabulary) in progress — `src/vocab.py` parses
 `tokenizer.json` (`model.vocab` + `added_tokens`) and builds `token_text` via the
-SDK's public `decode`. The input catalog, the output call models, the JSON
-loaders and the project-wide error policy are defined and validated with Pydantic
-(96 tests). Constrained decoding is the next step (M3–M5). Full documentation is
-delivered in the `docs` milestone.
+SDK's public `decode`. The token analysis excludes all 26 added control tokens
+(14 special + 12 markers such as `<tool_call>` and `<think>`) and the 267 model
+padding ids from the decoder's allowed set; byte-level fragments are kept and
+must be handled at the byte level. The input catalog, the output call models, the
+JSON loaders and the project-wide error policy are defined and validated with
+Pydantic (102 tests). Constrained decoding is the next step (M3–M5). Full
+documentation is delivered in the `docs` milestone.
 
 Baseline measured on the development machine (CPU, Python 3.13):
 
