@@ -1,0 +1,24 @@
+{
+  "model": {
+    "type": "BPE",
+    "vocab": {
+      "hello": 0,
+      "Ġhello": 1,
+      ":": 2,
+      "world": 3
+    }
+  },
+  "added_tokens": [
+    {
+      "id": 2,
+      "content": ":",
+      "special": true,
+      "single_word": false
+    },
+    {
+      "id": 4,
+      "content": "<|special|>",
+      "special": true
+    }
+  ]
+}

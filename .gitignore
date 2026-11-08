@@ -21,6 +21,7 @@ htmlcov/
 
 # Saída gerada em runtime
 data/output/
+.cache/
 
 # Material de apoio (não faz parte da entrega)
 GUIAS/
