@@ -6,17 +6,21 @@ Function-calling tool with **constrained decoding** on top of `Qwen/Qwen3-0.6B`:
 the model proposes the next token, a DFA masks every token that would break the
 JSON grammar, and the pipeline writes one function call per user prompt.
 
-Status: M0, M1 and M2 complete — `src/vocab.py` parses `tokenizer.json`
-(`model.vocab` + `added_tokens`), builds `token_text` via the SDK's public
-`decode`, and indexes tokens by first character so a step filters 151,643
-allowed tokens down to a handful before the prefix check. The analysis excludes
-all 26 added control tokens (14 special + 12 markers such as `<tool_call>` and
-`<think>`) and the 267 model padding ids from the decoder's allowed set;
-byte-level fragments are kept and must be handled at the byte level. The input
-catalog, the output call models, the JSON loaders and the project-wide error
-policy are defined and validated with Pydantic (118 tests plus a slow
-round-trip suite against the real model). Constrained decoding is the next step
-(M3–M5). Full documentation is delivered in the `docs` milestone.
+Status: M0, M1 and M2 complete; M3 (LLM baseline) in progress — `src/vocab.py`
+parses `tokenizer.json` (`model.vocab` + `added_tokens`), builds `token_text` via
+the SDK's public `decode`, and indexes tokens by first character so a step
+filters 151,643 allowed tokens down to a handful before the prefix check. The
+analysis excludes all 26 added control tokens (14 special + 12 markers such as
+`<tool_call>` and `<think>`) and the 267 model padding ids from the decoder's
+allowed set; byte-level fragments are kept and must be handled at the byte level.
+`src/llm_client.py` wraps the SDK behind a small typed interface (`encode`,
+`decode`, `logits`, `vocab_path`), normalizing the 2-D encode tensor to a flat
+`list[int]` and logits to a 1-D `float64` array, with a lazy real-model load and
+an injectable fake. The input catalog, the output call models, the JSON loaders
+and the project-wide error policy are defined and validated with Pydantic (132
+tests plus a slow round-trip suite against the real model). Prompt construction
+and the unconstrained baseline are the next steps. Full documentation is
+delivered in the `docs` milestone.
 
 Baseline measured on the development machine (CPU, Python 3.13):
 
@@ -63,7 +67,7 @@ make clean     # remove caches and generated output
 | M0 — Setup | repository, uv, SDK smoke test, CI, board | done |
 | M1 — Contracts | Pydantic models, loaders, error policy | done |
 | M2 — Vocabulary | tokenizer, `token_text`, indexes | done |
-| M3 — LLM baseline | client, prompt, unconstrained measurement | planned |
+| M3 — LLM baseline | client, prompt, unconstrained measurement | in progress |
 | M4 — Grammar/DFA | states, slots, transitions | planned |
 | M5 — Decoder | mask, argmax, generation loop | planned |
 | M6 — Pipeline | orchestration, validation, output | planned |
