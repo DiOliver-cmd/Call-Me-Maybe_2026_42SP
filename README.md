@@ -17,8 +17,12 @@ Baseline measured on the development machine (CPU, Python 3.13):
 
 - model load: 41.2 s on the first run (includes the Hugging Face download);
 - forward pass: 0.209 s median (3 runs, 11-token prompt);
-- vocabulary size: 151,936 tokens;
-- encode/decode round-trip lossless for ASCII, accented text, JSON and quotes.
+- vocabulary size: 151,669 entries in `tokenizer.json` (14 special tokens); the
+  model logits/embedding expose 151,936 positions;
+- decoding all 151,669 ids with the SDK's public `decode`: 0.483 s total;
+- `encode`/`decode` round-trip lossless for ASCII, accented text, JSON and quotes;
+- per-id `decode([id])` is lossy for byte-level fragments (e.g. ids 94–98 decode
+  to U+FFFD); multi-byte tokens must be handled at the byte level (T2.2).
 
 ## Layout
 

@@ -9,6 +9,15 @@ asks the SDK's public ``decode`` method for the final text.
 
 This module never loads the model at import time. All functions are pure except
 the two cache helpers, which only touch the filesystem path they are given.
+
+Exclusion rule: the decoder's allowed set is ``tokenizer.token_text`` minus
+:func:`excluded_token_ids`, which covers **every** id declared in
+``added_tokens`` (special or not). Non-special added tokens such as
+``<tool_call>`` or `` thinking`` are control markers, never JSON content. Ids
+exposed by the logits vector but absent from the tokenizer are padding positions
+and are reported by :func:`unmapped_token_ids`. Byte-level fragment tokens must
+stay allowed even when a per-id ``decode`` is lossy (returns ``U+FFFD``): they
+are needed to assemble multi-byte characters.
 """
 
 from __future__ import annotations
@@ -31,12 +40,14 @@ class TokenizerVocab:
 
     Attributes:
         token_text: Raw vocabulary strings keyed by token id (e.g. ``"Ġhello"``).
-        special_ids: Ids that the tokenizer declares as special/added tokens.
+        special_ids: Ids whose ``added_tokens`` entry has ``special=true``.
+        added_ids: Every id declared in ``added_tokens``, special or not.
         source: Which file and format the mapping came from, for diagnostics.
     """
 
     token_text: dict[int, str]
     special_ids: frozenset[int]
+    added_ids: frozenset[int]
     source: str
 
     @property
@@ -102,6 +113,7 @@ def _parse_plain_vocab(
     return TokenizerVocab(
         token_text=token_text,
         special_ids=frozenset(),
+        added_ids=frozenset(),
         source=source,
     )
 
@@ -110,8 +122,10 @@ def parse_tokenizer_json(path: PathLike) -> TokenizerVocab:
     """Parse a Hugging Face ``tokenizer.json`` file.
 
     Reads both ``model.vocab`` (token string -> id) and ``added_tokens`` (a
-    list of objects with ``id``, ``content`` and optional ``special``). Text is
-    stored raw; use :func:`build_token_text_via_decode` for decoded text.
+    list of objects with ``id``, ``content`` and optional ``special``). Every
+    added token id is stored in ``added_ids``; ``special_ids`` keeps only the
+    entries whose ``special`` flag is true. Text is stored raw; use
+    :func:`build_token_text_via_decode` for decoded text.
 
     Raises:
         ModelError: if the file is missing/unreadable, not valid JSON, has the
@@ -150,6 +164,7 @@ def parse_tokenizer_json(path: PathLike) -> TokenizerVocab:
     if not isinstance(added_tokens, list):
         raise ModelError(f"{file_path}: 'added_tokens' must be a list")
 
+    added_ids: set[int] = set()
     special_ids: set[int] = set()
     for index, item in enumerate(added_tokens):
         if not isinstance(item, dict):
@@ -173,12 +188,14 @@ def parse_tokenizer_json(path: PathLike) -> TokenizerVocab:
                 f"{file_path}: added_tokens[{index}].special must be a boolean"
             )
         _insert_token(token_text, raw_id, content, file_path)
+        added_ids.add(raw_id)
         if special:
             special_ids.add(raw_id)
 
     return TokenizerVocab(
         token_text=token_text,
         special_ids=frozenset(special_ids),
+        added_ids=frozenset(added_ids),
         source=f"{file_path}:tokenizer.json",
     )
 
@@ -187,8 +204,9 @@ def parse_vocab_json(path: PathLike) -> TokenizerVocab:
     """Parse a plain ``vocab.json`` (token -> id) as a documented fallback.
 
     This older format carries no ``added_tokens`` information, so
-    ``special_ids`` is always empty and the stored text is the raw BPE string.
-    Prefer :func:`parse_tokenizer_json` when a ``tokenizer.json`` is available.
+    ``special_ids`` and ``added_ids`` are always empty and the stored text is
+    the raw BPE string. Prefer :func:`parse_tokenizer_json` when a
+    ``tokenizer.json`` is available.
 
     Raises:
         ModelError: if the file is missing/unreadable, not valid JSON, or its
@@ -327,3 +345,42 @@ def load_token_text_cache(path: PathLike) -> dict[int, str]:
 def special_token_ids(tokenizer: TokenizerVocab) -> frozenset[int]:
     """Return the ids the tokenizer declares as special/added tokens."""
     return tokenizer.special_ids
+
+
+def excluded_token_ids(tokenizer: TokenizerVocab) -> frozenset[int]:
+    """Return ids excluded from the decoder's allowed token set.
+
+    Exclusion rule: every tokenizer-added control token must be excluded, so
+    this returns ``tokenizer.added_ids`` (all ``added_tokens`` entries, 26 for
+    Qwen3-0.6B). ``special=false`` markers such as ``<tool_call>`` or
+    `` thinking`` are still control tokens, never JSON content, and are
+    therefore excluded too.
+
+    Byte-level caveat: *only* added tokens are excluded. Byte-level fragment
+    tokens (for example ids 94-98, whose per-id ``decode`` is lossy and yields
+    ``U+FFFD``) stay allowed; the decoder needs them to assemble multi-byte
+    characters.
+    """
+    return tokenizer.added_ids
+
+
+def unmapped_token_ids(
+    tokenizer: TokenizerVocab,
+    logits_size: int,
+) -> frozenset[int]:
+    """Return ids exposed by the logits vector but absent from the tokenizer.
+
+    These are padding positions: the model can emit them, but ``tokenizer.json``
+    has no text for them, so the constrained decoder must never select them.
+
+    Raises:
+        ModelError: if ``logits_size`` is not positive.
+    """
+    if logits_size <= 0:
+        raise ModelError(f"logits_size must be positive, got {logits_size}")
+    known = tokenizer.token_text
+    return frozenset(
+        token_id
+        for token_id in range(logits_size)
+        if token_id not in known
+    )
