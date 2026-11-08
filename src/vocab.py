@@ -370,12 +370,22 @@ def save_token_text_cache(
         ) from exc
 
 
-def load_token_text_cache(path: PathLike) -> dict[int, str]:
+def load_token_text_cache(
+    path: PathLike,
+    expected_size: int | None = None,
+) -> dict[int, str]:
     """Load a cache written by :func:`save_token_text_cache`.
+
+    Callers that know the vocabulary size should pass ``expected_size`` so
+    :func:`validate_token_text` also checks full coverage and rejects
+    out-of-range ids. When omitted, only key format (non-negative integer
+    strings) is checked.
 
     Raises:
         ModelError: if the file is missing/unreadable, not valid JSON, is not
-            an object, or a key/value does not have the expected shape.
+            an object, a key/value does not have the expected shape, or
+            ``expected_size`` is given and the mapping does not cover
+            ``range(expected_size)`` exactly.
     """
     file_path = Path(path)
     raw = _load_json(file_path)
@@ -398,6 +408,9 @@ def load_token_text_cache(path: PathLike) -> dict[int, str]:
                 f"got {type(value).__name__}"
             )
         token_text[int(key)] = value
+
+    if expected_size is not None:
+        validate_token_text(token_text, expected_size)
     return token_text
 
 
