@@ -1,8 +1,9 @@
 """Load and validate the JSON input files used by the pipeline.
 
 This module is the only place allowed to touch ``data/input/*.json``. It turns
-every expected input problem (missing file, bad JSON, schema mismatch, empty
-input) into :class:`DataLoadError` so that callers never have to handle a raw
+every expected problem into a :class:`ProjectError`: I/O and parse failures
+become :class:`InputError`, while data that does not match the declared
+contract becomes :class:`SchemaError`. Callers never have to handle a raw
 ``FileNotFoundError``, ``json.JSONDecodeError`` or Pydantic ``ValidationError``.
 """
 
@@ -14,44 +15,36 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from src.errors import InputError, SchemaError
 from src.schemas import FunctionCatalog
 
 # Public loaders accept either a string or a ``pathlib.Path``.
 PathLike = str | Path
 
 
-class DataLoadError(Exception):
-    """Raised for any expected problem while loading an input file.
-
-    T1.5 will consolidate the project-wide exception policy; until then this
-    loader-local exception keeps input failures distinguishable from real bugs
-    in the rest of the code.
-    """
-
-
 def _read_json(path: PathLike) -> Any:
     """Read and parse a UTF-8 JSON file, wrapping I/O and parse errors.
 
     Returns the decoded JSON value, which may be any JSON type. Every expected
-    failure is reported as :class:`DataLoadError` naming the offending file.
+    failure is reported as :class:`InputError` naming the offending file.
     """
     file_path = Path(path)
     try:
         with file_path.open(encoding="utf-8") as handle:
             return json.load(handle)
     except FileNotFoundError as exc:
-        raise DataLoadError(f"{file_path}: file not found") from exc
+        raise InputError(f"{file_path}: file not found") from exc
     except IsADirectoryError as exc:
-        raise DataLoadError(
+        raise InputError(
             f"{file_path}: expected a file but found a directory"
         ) from exc
     except json.JSONDecodeError as exc:
-        raise DataLoadError(
+        raise InputError(
             f"{file_path}: invalid JSON at line {exc.lineno}, "
             f"column {exc.colno}: {exc.msg}"
         ) from exc
     except OSError as exc:
-        raise DataLoadError(f"{file_path}: could not read file: {exc}") from exc
+        raise InputError(f"{file_path}: could not read file: {exc}") from exc
 
 
 def _summarize_validation_error(exc: ValidationError, limit: int = 3) -> str:
@@ -77,21 +70,22 @@ def load_functions(path: PathLike) -> FunctionCatalog:
     to choose from.
 
     Raises:
-        DataLoadError: if the file is missing, unreadable, not valid JSON,
-            fails schema validation, or declares no functions.
+        InputError: if the file is missing, unreadable, not valid JSON, or
+            declares no functions.
+        SchemaError: if the loaded data does not match the catalog contract.
     """
     source = Path(path)
     raw = _read_json(source)
     try:
         catalog = FunctionCatalog.model_validate(raw)
     except ValidationError as exc:
-        raise DataLoadError(
+        raise SchemaError(
             f"{source}: invalid function catalog: "
             f"{_summarize_validation_error(exc)}"
         ) from exc
 
     if not catalog.functions:
-        raise DataLoadError(
+        raise InputError(
             f"{source}: function catalog must contain at least one function"
         )
     return catalog
@@ -100,22 +94,22 @@ def load_functions(path: PathLike) -> FunctionCatalog:
 def _extract_prompt(source: Path, index: int, item: Any) -> str:
     """Validate one prompt entry and return its text unchanged."""
     if not isinstance(item, dict):
-        raise DataLoadError(
+        raise SchemaError(
             f"{source}: prompt entry at index {index} must be an object, "
             f"got {type(item).__name__}"
         )
     if "prompt" not in item:
-        raise DataLoadError(
+        raise SchemaError(
             f"{source}: prompt entry at index {index} is missing 'prompt'"
         )
     prompt = item["prompt"]
     if not isinstance(prompt, str):
-        raise DataLoadError(
+        raise SchemaError(
             f"{source}: prompt entry at index {index} must be a string, "
             f"got {type(prompt).__name__}"
         )
     if not prompt.strip():
-        raise DataLoadError(
+        raise InputError(
             f"{source}: prompt entry at index {index} must not be blank"
         )
     return prompt
@@ -130,19 +124,20 @@ def load_prompts(path: PathLike) -> list[str]:
     blank question) is almost always a data mistake.
 
     Raises:
-        DataLoadError: if the file is missing, unreadable, not valid JSON, the
-            root is not a list, the list is empty, or an entry is not an object
-            with a non-blank string ``prompt``.
+        InputError: if the file is missing, unreadable, not valid JSON, the
+            list is empty, or a prompt is blank.
+        SchemaError: if the root is not a list or an entry is not an object
+            with a string ``prompt`` key.
     """
     source = Path(path)
     raw = _read_json(source)
 
     if not isinstance(raw, list):
-        raise DataLoadError(
+        raise SchemaError(
             f"{source}: expected a JSON list of prompts, got {type(raw).__name__}"
         )
     if not raw:
-        raise DataLoadError(
+        raise InputError(
             f"{source}: prompt list must contain at least one prompt"
         )
 
