@@ -11,6 +11,7 @@ import pytest
 from src.errors import ModelError, ProjectError
 from src.vocab import (
     TokenizerVocab,
+    build_token_index,
     build_token_text_via_decode,
     excluded_token_ids,
     load_token_text_cache,
@@ -256,3 +257,63 @@ def test_unmapped_token_ids_rejects_non_positive_size(logits_size: int) -> None:
         unmapped_token_ids(tokenizer, logits_size)
 
     _assert_model_error(excinfo, "logits_size")
+
+
+def test_build_token_index_excludes_all_added_tokens() -> None:
+    tokenizer = parse_tokenizer_json(TOKENIZER_FIXTURE)
+    index = build_token_index(tokenizer)
+
+    mapped = set(tokenizer.token_text)
+    assert set(index.allowed_ids) == mapped - tokenizer.added_ids
+    assert index.allowed_ids == (0, 1, 3)
+    for added_id in tokenizer.added_ids:
+        assert added_id not in index.allowed_ids
+
+
+def test_tokens_starting_with_empty_prefix_returns_allowed_ids() -> None:
+    index = build_token_index(parse_tokenizer_json(TOKENIZER_FIXTURE))
+
+    assert index.tokens_starting_with("") == index.allowed_ids
+
+
+def test_tokens_starting_with_multi_char_prefix_filters_by_text() -> None:
+    index = build_token_index(parse_tokenizer_json(TOKENIZER_FIXTURE))
+
+    assert index.tokens_starting_with("hel") == (0,)
+    assert index.tokens_starting_with("Ġh") == (1,)
+
+
+def test_tokens_starting_with_unknown_prefix_returns_empty() -> None:
+    index = build_token_index(parse_tokenizer_json(TOKENIZER_FIXTURE))
+
+    assert index.tokens_starting_with("zzz") == ()
+    assert index.tokens_starting_with("\ufffd") == ()
+
+
+def test_by_first_char_keys_match_allowed_tokens() -> None:
+    tokenizer = parse_tokenizer_json(TOKENIZER_FIXTURE)
+    index = build_token_index(tokenizer)
+
+    expected = {
+        tokenizer.token_text[token_id][0]
+        for token_id in index.allowed_ids
+        if tokenizer.token_text[token_id]
+    }
+    assert set(index.by_first_char) == expected
+    for char, token_ids in index.by_first_char.items():
+        assert token_ids == tuple(sorted(token_ids))
+        assert all(
+            tokenizer.token_text[token_id].startswith(char)
+            for token_id in token_ids
+        )
+
+
+def test_build_token_index_keys_byte_fragments_on_replacement_char() -> None:
+    tokenizer = parse_tokenizer_json(TOKENIZER_FIXTURE)
+    texts = dict(tokenizer.token_text)
+    texts[3] = "\ufffd"
+
+    index = build_token_index(tokenizer, texts=texts)
+
+    assert index.texts[3] == "\ufffd"
+    assert index.by_first_char["\ufffd"] == (3,)

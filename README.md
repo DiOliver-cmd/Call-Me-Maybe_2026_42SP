@@ -7,14 +7,16 @@ the model proposes the next token, a DFA masks every token that would break the
 JSON grammar, and the pipeline writes one function call per user prompt.
 
 Status: M0 and M1 complete; M2 (vocabulary) in progress — `src/vocab.py` parses
-`tokenizer.json` (`model.vocab` + `added_tokens`) and builds `token_text` via the
-SDK's public `decode`. The token analysis excludes all 26 added control tokens
-(14 special + 12 markers such as `<tool_call>` and `<think>`) and the 267 model
-padding ids from the decoder's allowed set; byte-level fragments are kept and
-must be handled at the byte level. The input catalog, the output call models, the
-JSON loaders and the project-wide error policy are defined and validated with
-Pydantic (102 tests). Constrained decoding is the next step (M3–M5). Full
-documentation is delivered in the `docs` milestone.
+`tokenizer.json` (`model.vocab` + `added_tokens`), builds `token_text` via the
+SDK's public `decode`, and indexes tokens by first character so a step filters
+151,643 allowed tokens down to a handful before the prefix check. The analysis
+excludes all 26 added control tokens (14 special + 12 markers such as
+`<tool_call>` and `<think>`) and the 267 model padding ids from the decoder's
+allowed set; byte-level fragments are kept and must be handled at the byte level.
+The input catalog, the output call models, the JSON loaders and the project-wide
+error policy are defined and validated with Pydantic (108 tests). Constrained
+decoding is the next step (M3–M5). Full documentation is delivered in the `docs`
+milestone.
 
 Baseline measured on the development machine (CPU, Python 3.13):
 
@@ -25,7 +27,9 @@ Baseline measured on the development machine (CPU, Python 3.13):
 - decoding all 151,669 ids with the SDK's public `decode`: 0.483 s total;
 - `encode`/`decode` round-trip lossless for ASCII, accented text, JSON and quotes;
 - per-id `decode([id])` is lossy for byte-level fragments (e.g. ids 94–98 decode
-  to U+FFFD); multi-byte tokens must be handled at the byte level (T2.2).
+  to U+FFFD); multi-byte tokens must be handled at the byte level (T2.2);
+- token index built in 0.057 s; first-char lookup narrows 151,643 allowed tokens
+  to 60 candidates for `{` and 424 for `"` (up to ~940× faster than a full scan).
 
 ## Layout
 
