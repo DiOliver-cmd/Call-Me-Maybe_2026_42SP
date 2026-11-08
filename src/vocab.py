@@ -1,0 +1,329 @@
+"""Vocabulary loading and ``token_text`` construction for the decoder.
+
+Qwen uses **byte-level BPE**: the raw vocabulary string is not the text the
+model actually emits. For example ``"Ġhello"`` represents ``" hello"`` and
+``"Ċ"`` represents a newline. The constrained decoder must validate tokens
+against the DFA using real decoded text, so the raw representation is only kept
+as a documented fallback; prefer :func:`build_token_text_via_decode`, which
+asks the SDK's public ``decode`` method for the final text.
+
+This module never loads the model at import time. All functions are pure except
+the two cache helpers, which only touch the filesystem path they are given.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from src.errors import ModelError
+
+# Public helpers accept either a string or a ``pathlib.Path``.
+PathLike = str | Path
+
+
+@dataclass(frozen=True)
+class TokenizerVocab:
+    """A parsed tokenizer asset.
+
+    Attributes:
+        token_text: Raw vocabulary strings keyed by token id (e.g. ``"Ġhello"``).
+        special_ids: Ids that the tokenizer declares as special/added tokens.
+        source: Which file and format the mapping came from, for diagnostics.
+    """
+
+    token_text: dict[int, str]
+    special_ids: frozenset[int]
+    source: str
+
+    @property
+    def vocab_size(self) -> int:
+        """Number of token entries in the mapping."""
+        return len(self.token_text)
+
+
+def _load_json(path: Path) -> Any:
+    """Read a UTF-8 JSON model asset, wrapping every failure as ModelError."""
+    try:
+        with path.open(encoding="utf-8") as handle:
+            return json.load(handle)
+    except FileNotFoundError as exc:
+        raise ModelError(f"{path}: file not found") from exc
+    except IsADirectoryError as exc:
+        raise ModelError(
+            f"{path}: expected a file but found a directory"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise ModelError(
+            f"{path}: invalid JSON at line {exc.lineno}, "
+            f"column {exc.colno}: {exc.msg}"
+        ) from exc
+    except OSError as exc:
+        raise ModelError(f"{path}: could not read file: {exc}") from exc
+
+
+def _insert_token(
+    token_text: dict[int, str],
+    token_id: int,
+    text: str,
+    path: Path,
+) -> None:
+    """Insert one id -> text pair, rejecting a conflicting duplicate id."""
+    existing = token_text.get(token_id)
+    if existing is not None and existing != text:
+        raise ModelError(
+            f"{path}: conflicting text for token id {token_id}: "
+            f"{existing!r} vs {text!r}"
+        )
+    token_text[token_id] = text
+
+
+def _parse_plain_vocab(
+    path: Path,
+    raw: Mapping[Any, Any],
+    source: str,
+) -> TokenizerVocab:
+    """Validate a plain token -> id mapping and wrap it as TokenizerVocab."""
+    token_text: dict[int, str] = {}
+    for token, raw_id in raw.items():
+        if not isinstance(token, str):
+            raise ModelError(
+                f"{path}: vocabulary key must be a string, "
+                f"got {type(token).__name__}"
+            )
+        if type(raw_id) is not int:
+            raise ModelError(
+                f"{path}: id for vocabulary token {token!r} must be an integer"
+            )
+        _insert_token(token_text, raw_id, token, path)
+    return TokenizerVocab(
+        token_text=token_text,
+        special_ids=frozenset(),
+        source=source,
+    )
+
+
+def parse_tokenizer_json(path: PathLike) -> TokenizerVocab:
+    """Parse a Hugging Face ``tokenizer.json`` file.
+
+    Reads both ``model.vocab`` (token string -> id) and ``added_tokens`` (a
+    list of objects with ``id``, ``content`` and optional ``special``). Text is
+    stored raw; use :func:`build_token_text_via_decode` for decoded text.
+
+    Raises:
+        ModelError: if the file is missing/unreadable, not valid JSON, has the
+            wrong shape, or an added token collides with a different text.
+    """
+    file_path = Path(path)
+    raw = _load_json(file_path)
+    if not isinstance(raw, dict):
+        raise ModelError(
+            f"{file_path}: expected a JSON object, got {type(raw).__name__}"
+        )
+
+    model = raw.get("model")
+    if not isinstance(model, dict):
+        raise ModelError(f"{file_path}: missing or invalid 'model' object")
+    vocab = model.get("vocab")
+    if not isinstance(vocab, dict):
+        raise ModelError(
+            f"{file_path}: missing or invalid 'model.vocab' object"
+        )
+
+    token_text: dict[int, str] = {}
+    for token, raw_id in vocab.items():
+        if not isinstance(token, str):
+            raise ModelError(
+                f"{file_path}: model.vocab key must be a string, "
+                f"got {type(token).__name__}"
+            )
+        if type(raw_id) is not int:
+            raise ModelError(
+                f"{file_path}: id for vocab token {token!r} must be an integer"
+            )
+        _insert_token(token_text, raw_id, token, file_path)
+
+    added_tokens = raw.get("added_tokens", [])
+    if not isinstance(added_tokens, list):
+        raise ModelError(f"{file_path}: 'added_tokens' must be a list")
+
+    special_ids: set[int] = set()
+    for index, item in enumerate(added_tokens):
+        if not isinstance(item, dict):
+            raise ModelError(
+                f"{file_path}: added_tokens[{index}] must be an object"
+            )
+        raw_id = item.get("id")
+        if type(raw_id) is not int:
+            raise ModelError(
+                f"{file_path}: added_tokens[{index}] is missing an integer 'id'"
+            )
+        content = item.get("content")
+        if not isinstance(content, str):
+            raise ModelError(
+                f"{file_path}: added_tokens[{index}] is missing a string "
+                f"'content'"
+            )
+        special = item.get("special", False)
+        if not isinstance(special, bool):
+            raise ModelError(
+                f"{file_path}: added_tokens[{index}].special must be a boolean"
+            )
+        _insert_token(token_text, raw_id, content, file_path)
+        if special:
+            special_ids.add(raw_id)
+
+    return TokenizerVocab(
+        token_text=token_text,
+        special_ids=frozenset(special_ids),
+        source=f"{file_path}:tokenizer.json",
+    )
+
+
+def parse_vocab_json(path: PathLike) -> TokenizerVocab:
+    """Parse a plain ``vocab.json`` (token -> id) as a documented fallback.
+
+    This older format carries no ``added_tokens`` information, so
+    ``special_ids`` is always empty and the stored text is the raw BPE string.
+    Prefer :func:`parse_tokenizer_json` when a ``tokenizer.json`` is available.
+
+    Raises:
+        ModelError: if the file is missing/unreadable, not valid JSON, or its
+            shape is not a string -> integer mapping.
+    """
+    file_path = Path(path)
+    raw = _load_json(file_path)
+    if not isinstance(raw, dict):
+        raise ModelError(
+            f"{file_path}: expected a JSON object, got {type(raw).__name__}"
+        )
+    return _parse_plain_vocab(
+        file_path,
+        raw,
+        source=f"{file_path}:vocab.json",
+    )
+
+
+def build_token_text_via_decode(
+    model: Any,
+    ids: Sequence[int],
+) -> dict[int, str]:
+    """Decode every id once through the SDK's public ``decode`` method.
+
+    ``model`` is duck-typed: any object with a ``decode(list[int]) -> str``
+    method works, so tests can pass a fake without importing the SDK. The
+    result is the real text the decoder should validate against the DFA.
+
+    Raises:
+        ModelError: if ``decode`` fails for an id.
+    """
+    token_text: dict[int, str] = {}
+    for token_id in ids:
+        try:
+            token_text[token_id] = model.decode([token_id])
+        except Exception as exc:
+            raise ModelError(
+                f"failed to decode token id {token_id}: {exc}"
+            ) from exc
+    return token_text
+
+
+def validate_token_text(
+    token_text: Mapping[int, str],
+    expected_size: int,
+) -> None:
+    """Check that ``token_text`` covers every id in ``range(expected_size)``.
+
+    Empty strings are allowed (some tokens legitimately decode to nothing); an
+    empty *mapping* is not. Duplicate keys cannot occur in a mapping, but the
+    count is checked defensively.
+
+    Raises:
+        ModelError: if the mapping is empty, contains ids outside the expected
+            range, or is missing ids.
+    """
+    if not token_text:
+        raise ModelError(
+            f"token_text is empty; expected ids in range({expected_size})"
+        )
+
+    ids = set(token_text)
+    if len(token_text) != len(ids):
+        raise ModelError("token_text contains duplicate ids")
+
+    out_of_range = sorted(
+        token_id for token_id in ids if not 0 <= token_id < expected_size
+    )
+    if out_of_range:
+        preview = ", ".join(str(token_id) for token_id in out_of_range[:5])
+        suffix = "..." if len(out_of_range) > 5 else ""
+        raise ModelError(
+            f"{len(out_of_range)} token id(s) outside "
+            f"range({expected_size}): {preview}{suffix}"
+        )
+
+    missing = sorted(set(range(expected_size)) - ids)
+    if missing:
+        preview = ", ".join(str(token_id) for token_id in missing[:5])
+        suffix = "..." if len(missing) > 5 else ""
+        raise ModelError(
+            f"token_text is missing {len(missing)} id(s) in "
+            f"range({expected_size}): {preview}{suffix}"
+        )
+
+
+def save_token_text_cache(
+    path: PathLike,
+    token_text: Mapping[int, str],
+) -> None:
+    """Write ``token_text`` as a JSON object mapping ``str(id)`` -> text."""
+    file_path = Path(path)
+    payload = {str(token_id): text for token_id, text in token_text.items()}
+    try:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        with file_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+    except OSError as exc:
+        raise ModelError(
+            f"{file_path}: could not write token_text cache: {exc}"
+        ) from exc
+
+
+def load_token_text_cache(path: PathLike) -> dict[int, str]:
+    """Load a cache written by :func:`save_token_text_cache`.
+
+    Raises:
+        ModelError: if the file is missing/unreadable, not valid JSON, is not
+            an object, or a key/value does not have the expected shape.
+    """
+    file_path = Path(path)
+    raw = _load_json(file_path)
+    if not isinstance(raw, dict):
+        raise ModelError(
+            f"{file_path}: cache must be a JSON object, "
+            f"got {type(raw).__name__}"
+        )
+
+    token_text: dict[int, str] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not (key.isascii() and key.isdigit()):
+            raise ModelError(
+                f"{file_path}: cache key {key!r} is not a non-negative "
+                f"integer string"
+            )
+        if not isinstance(value, str):
+            raise ModelError(
+                f"{file_path}: cache value for id {key} must be a string, "
+                f"got {type(value).__name__}"
+            )
+        token_text[int(key)] = value
+    return token_text
+
+
+def special_token_ids(tokenizer: TokenizerVocab) -> frozenset[int]:
+    """Return the ids the tokenizer declares as special/added tokens."""
+    return tokenizer.special_ids
