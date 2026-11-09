@@ -15,6 +15,7 @@ Error categories
 * :class:`InputError`: missing, unreadable or malformed input, or empty input.
 * :class:`SchemaError`: data does not match the declared contract.
 * :class:`DecodingError`: constrained decoding failure.
+* :class:`BudgetExceededError`: decoding exceeded its wall-clock budget.
 * :class:`ModelError`: model or SDK failure.
 """
 
@@ -41,6 +42,16 @@ class SchemaError(ProjectError):
 
 class DecodingError(ProjectError):
     """Constrained decoding failed to produce a valid output."""
+
+
+class BudgetExceededError(DecodingError):
+    """Decoding exceeded its wall-clock budget or per-prompt timeout.
+
+    This is a :class:`DecodingError` (and therefore a :class:`ProjectError`),
+    so the existing CLI policy already maps it to exit code 1. It is raised
+    before the pipeline writes anything, which guarantees that an aborted run
+    leaves no partial output file.
+    """
 
 
 class ModelError(ProjectError):

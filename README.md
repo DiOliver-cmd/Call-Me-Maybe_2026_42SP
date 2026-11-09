@@ -6,7 +6,7 @@ Function-calling tool with **constrained decoding** on top of `Qwen/Qwen3-0.6B`:
 the model proposes the next token, a DFA masks every token that would break the
 JSON grammar, and the pipeline writes one function call per user prompt.
 
-Status: M0, M1 and M2 complete; M3 (LLM baseline) in progress — `src/vocab.py`
+Status: M0–M3 complete — `src/vocab.py`
 parses `tokenizer.json` (`model.vocab` + `added_tokens`), builds `token_text` via
 the SDK's public `decode`, and indexes tokens by first character so a step
 filters 151,643 allowed tokens down to a handful before the prefix check. The
@@ -21,9 +21,13 @@ an injectable fake. `src/prompt.py` builds a deterministic plain-text prompt
 template; measured sizes are 383–402 tokens with the full 6-function catalog and
 148–167 tokens with a single function. The input catalog, the output call
 models, the JSON loaders and the project-wide error policy are defined and
-validated with Pydantic (142 tests plus a slow round-trip suite against the real
-model). The unconstrained baseline is the next step. Full documentation is
-delivered in the `docs` milestone.
+validated with Pydantic (154 tests plus a slow round-trip suite against the real
+model). The unconstrained baseline (10 prompts, argmax, 48-token cap) produced
+**1/10 valid JSON, 1/10 correct function and 1/10 correct arguments**. The
+budget is `MAX_TOKENS = 48`, a 300 s total deadline and a 180 s per-prompt safety
+valve; on this CPU the worst case is 36.9 min, so the 5-minute target is
+documented as at risk and deferred to T8.4. Full documentation is delivered in
+the `docs` milestone.
 
 Baseline measured on the development machine (CPU, Python 3.13):
 
@@ -39,7 +43,12 @@ Baseline measured on the development machine (CPU, Python 3.13):
   to 60 candidates for `{` and 424 for `"` (up to ~940× faster than a full scan);
 - SDK `encode()` returns a 2-D `(1, n)` tensor, so the decoder must flatten it
   before passing ids to `decode` (T2.4); round-trip is lossless for `{"a": 1}`,
-  `"hello"` and `"olá"`.
+  `"hello"` and `"olá"`;
+- unconstrained baseline (10 prompts, argmax, 48-token cap): 1/10 valid JSON,
+  1/10 correct function, 1/10 correct arguments; 1301.6 s total (~130 s/prompt);
+- cost per generated token is ~2.5 s with the ~390-token 6-function prompt
+  (CPU, no KV cache in the public SDK), so the 5-minute target is at risk and
+  must be validated in T8.4.
 
 ## Layout
 
