@@ -1,4 +1,4 @@
-"""DFA states, alphabet and pure transitions for the output template (T4.1/T4.2).
+"""DFA states, alphabet, pure transitions and slot validation (T4.1-T4.3).
 
 The decoder emits exactly one JSON object, with a fixed key order:
 
@@ -6,10 +6,9 @@ The decoder emits exactly one JSON object, with a fixed key order:
 
 The structural text is injected by the decoder later (T4.5); the model only
 chooses the function name and the parameter values. :func:`transition` is the
-pure char-by-char core; :meth:`DFA.consume` updates one machine. T4.3 refines
-slot validation (catalog names, JSON numbers, true/false, unicode escapes) and
-T4.4 adds ``consume_token``. ``ACCEPT`` is reachable only after the root ``}``
-that follows the parameters object.
+pure, structural char-by-char core; :meth:`DFA.consume` adds the four slot
+validators on top and updates one machine atomically. ``ACCEPT`` is reachable
+only after the root ``}`` that follows the parameters object.
 
 State table
 -----------
@@ -56,6 +55,32 @@ Whitespace is accepted in all three start states, matching JSON. The earlier
 ``PARAM_KEY_START`` remains necessary: after a comma a key opening quote is
 required, so a ``}`` cannot be accepted as a trailing comma.
 
+Slot validation
+---------------
+``transition`` stays structural and pure. ``DFA.consume`` additionally checks:
+
+* function names against an optional :class:`NameMatcher`: prefixes while the
+  name is being typed, exact membership when the closing quote arrives. With
+  ``names=None`` the T4.2 behavior is preserved;
+* numbers with :func:`is_number_prefix` while typing and
+  :func:`is_complete_number` on the delimiter;
+* booleans as prefixes of ``true``/``false``, complete on the delimiter;
+* string escapes, including exactly four hex digits after a ``u`` escape.
+
+A rejected character leaves the state and every buffer unchanged (atomicity),
+which is what T4.4 will rely on for token-level rollback. T5.1 can use
+:meth:`NameMatcher.candidates` to mask the next name token.
+
+Reuse and whitespace
+--------------------
+The decoder should create one machine per prompt with
+:meth:`DFA.start` or call :meth:`DFA.reset` before reuse; assigning only
+``state`` leaks slot buffers and the escape counter. Whitespace is accepted only
+between structural tokens. Outer whitespace before the root ``{`` and after the
+final ``}`` is rejected, so a multi-character token such as ``"}\\n"`` will be
+rejected by T4.4's ``consume_token``. The decoder must handle EOS and any outer
+whitespace policy explicitly.
+
 Alphabet
 --------
 The alphabet is the union of ``STRUCTURAL_CHARS``, ``NUMBER_CHARS``,
@@ -66,6 +91,8 @@ maps whole token texts onto these characters.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -75,9 +102,12 @@ __all__ = [
     "ESCAPE_CHARS",
     "LITERAL_CHARS",
     "NUMBER_CHARS",
+    "NameMatcher",
     "STRUCTURAL_CHARS",
     "TEMPLATE_KEYS",
     "WHITESPACE_CHARS",
+    "is_complete_number",
+    "is_number_prefix",
     "is_string_char",
     "transition",
 ]
@@ -99,6 +129,81 @@ ESCAPE_CHARS: frozenset[str] = frozenset('"\\/bfnrtu')
 
 # Whitespace allowed between structural tokens.
 WHITESPACE_CHARS: frozenset[str] = frozenset(" \t\r\n")
+
+_HEX_DIGITS: frozenset[str] = frozenset("0123456789abcdefABCDEF")
+
+_BOOLEAN_LITERALS: tuple[str, ...] = ("false", "true")
+
+_STR_NAMES_ERROR = (
+    "names must be an iterable of names, not a str; "
+    "pass a list such as ['fn_add']"
+)
+
+# Complete JSON number grammar from T4.3.
+_COMPLETE_NUMBER_RE = re.compile(
+    r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?"
+)
+
+# Prefix grammar: a fraction dot may be the last character, but an exponent
+# cannot follow a dot that has no digit yet ("1." is a prefix, "1.e" is not).
+_NUMBER_PREFIX_RE = re.compile(
+    r"-?(?:0|[1-9][0-9]*)"
+    r"(?:"
+    r"\.[0-9]+(?:[eE][+-]?[0-9]*)?"
+    r"|\."
+    r"|[eE][+-]?[0-9]*"
+    r")?"
+)
+
+
+class NameMatcher:
+    """Prefix/exact matcher for the function names allowed in a call.
+
+    Every name must be representable inside the ``NAME_VALUE`` string slot:
+    quotes, backslashes and control characters are rejected because that slot
+    would never accept them as literal content.
+    """
+
+    def __init__(self, names: Iterable[str]) -> None:
+        """Store ``names`` as a frozenset, rejecting invalid entries."""
+        if isinstance(names, str):
+            raise TypeError(_STR_NAMES_ERROR)
+        items = tuple(names)
+        if not items:
+            raise ValueError("names must not be empty")
+        for name in items:
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(
+                    f"name must be a non-blank string, got {name!r}"
+                )
+            if any(
+                char in {'"', "\\"} or ord(char) < 0x20 for char in name
+            ):
+                raise ValueError(
+                    f"name {name!r} contains a character the name slot "
+                    "cannot represent"
+                )
+        self._names = frozenset(items)
+
+    def is_prefix(self, text: str) -> bool:
+        """Return whether some allowed name starts with ``text``.
+
+        The empty string is a valid prefix. This is what lets the decoder keep
+        typing a name that is not complete yet.
+        """
+        return any(name.startswith(text) for name in self._names)
+
+    def is_complete(self, text: str) -> bool:
+        """Return whether ``text`` is exactly one of the allowed names."""
+        return text in self._names
+
+    def candidates(self, prefix: str) -> tuple[str, ...]:
+        """Return the allowed names starting with ``prefix``, sorted."""
+        return tuple(
+            sorted(
+                name for name in self._names if name.startswith(prefix)
+            )
+        )
 
 
 class DFAState(Enum):
@@ -141,6 +246,11 @@ class DFA:
     """The state of one in-progress output-template parse."""
 
     state: DFAState = DFAState.START
+    names: NameMatcher | None = None
+    name_buffer: str = ""
+    number_buffer: str = ""
+    literal_buffer: str = ""
+    unicode_remaining: int = 0
 
     def __post_init__(self) -> None:
         """Reject states that are not :class:`DFAState` members."""
@@ -153,23 +263,150 @@ class DFA:
         """Return whether the machine has closed the root object."""
         return self.state is DFAState.ACCEPT
 
-    def consume(self, char: str) -> bool:
-        """Consume one character, updating the state on success.
+    def reset(self) -> None:
+        """Return to ``START`` and clear every slot buffer, keeping ``names``.
 
-        This is the stateful convenience used by the decoder. It returns
-        ``True`` when :func:`transition` accepts ``char``; on rejection it
-        leaves the state unchanged and returns ``False``.
+        The decoder should create one machine per prompt with
+        :meth:`DFA.start` or call this method before reuse. Assigning only
+        ``state`` leaks the name/number/literal buffers and the escape counter
+        into the next prompt.
         """
-        next_state = transition(self.state, char)
+        self.state = DFAState.START
+        self.name_buffer = ""
+        self.number_buffer = ""
+        self.literal_buffer = ""
+        self.unicode_remaining = 0
+
+    def consume(self, char: str) -> bool:
+        """Consume one character, validating the active slot atomically.
+
+        The structural move comes from :func:`transition`; the slot checks are
+        layered on top. On rejection neither the state nor any buffer changes,
+        so a failed character can be dropped without corrupting the machine.
+        """
+        if not isinstance(char, str) or len(char) != 1:
+            return False
+
+        state = self.state
+        next_state = transition(state, char)
         if next_state is None:
             return False
+
+        name_buffer = self.name_buffer
+        number_buffer = self.number_buffer
+        literal_buffer = self.literal_buffer
+        unicode_remaining = self.unicode_remaining
+        names = self.names
+
+        if state is DFAState.PROMPT_VALUE_START and char == '"':
+            unicode_remaining = 0
+
+        if state is DFAState.NAME_VALUE_START and char == '"':
+            name_buffer = ""
+            unicode_remaining = 0
+
+        if state is DFAState.PARAM_KEY_DONE and char == ":":
+            number_buffer = ""
+            literal_buffer = ""
+            unicode_remaining = 0
+
+        if (
+            state
+            in {
+                DFAState.PARAMETERS_EMPTY_OR_KEY,
+                DFAState.PARAM_KEY_START,
+            }
+            and char == '"'
+        ):
+            number_buffer = ""
+            literal_buffer = ""
+            unicode_remaining = 0
+
+        if state is DFAState.PARAM_VALUE_START:
+            if char == '"':
+                number_buffer = ""
+                literal_buffer = ""
+                unicode_remaining = 0
+            elif char in {"t", "f"}:
+                number_buffer = ""
+                literal_buffer = char
+                unicode_remaining = 0
+            elif char == "-" or char in "0123456789":
+                number_buffer = char
+                literal_buffer = ""
+                unicode_remaining = 0
+
+        if state is DFAState.NAME_VALUE:
+            if char == '"':
+                if names is not None and not names.is_complete(name_buffer):
+                    return False
+            else:
+                candidate = name_buffer + char
+                if names is not None and not names.is_prefix(candidate):
+                    return False
+                name_buffer = candidate
+
+        if state is DFAState.PARAM_VALUE_NUMBER:
+            if char in NUMBER_CHARS:
+                candidate = number_buffer + char
+                if not is_number_prefix(candidate):
+                    return False
+                number_buffer = candidate
+            elif char in WHITESPACE_CHARS or char in {",", "}"}:
+                if not is_complete_number(number_buffer):
+                    return False
+                number_buffer = ""
+                literal_buffer = ""
+            else:
+                return False
+
+        if state is DFAState.PARAM_VALUE_BOOLEAN:
+            if char in LITERAL_CHARS:
+                candidate = literal_buffer + char
+                if not _is_boolean_prefix(candidate):
+                    return False
+                literal_buffer = candidate
+            elif char in WHITESPACE_CHARS or char in {",", "}"}:
+                if not _is_complete_boolean(literal_buffer):
+                    return False
+                literal_buffer = ""
+                number_buffer = ""
+            else:
+                return False
+
+        if state in {
+            DFAState.PROMPT_VALUE_ESCAPE,
+            DFAState.PARAM_VALUE_STRING_ESCAPE,
+        }:
+            unicode_remaining = 4 if char == "u" else 0
+
+        if state in {
+            DFAState.PROMPT_VALUE,
+            DFAState.PARAM_VALUE_STRING,
+        } and unicode_remaining > 0:
+            if char not in _HEX_DIGITS:
+                return False
+            unicode_remaining -= 1
+
         self.state = next_state
+        self.name_buffer = name_buffer
+        self.number_buffer = number_buffer
+        self.literal_buffer = literal_buffer
+        self.unicode_remaining = unicode_remaining
         return True
 
     @classmethod
-    def start(cls) -> DFA:
-        """Return a fresh machine in ``START``."""
-        return cls(state=DFAState.START)
+    def start(cls, names: Iterable[str] | None = None) -> DFA:
+        """Return a fresh machine in ``START``.
+
+        ``names`` enables function-name validation; passing ``None`` keeps the
+        T4.2 behavior of accepting any name string. A bare string is rejected
+        instead of being silently split into characters.
+        """
+        if isinstance(names, str):
+            raise TypeError(_STR_NAMES_ERROR)
+        matcher = NameMatcher(names) if names is not None else None
+        return cls(state=DFAState.START, names=matcher)
 
 
 def is_string_char(char: str) -> bool:
@@ -188,14 +425,38 @@ def is_string_char(char: str) -> bool:
     return ord(char) >= 0x20
 
 
+def is_number_prefix(text: str) -> bool:
+    """Return whether ``text`` can still become a complete JSON number.
+
+    Partial forms such as ``""``, ``"-"``, ``"1."``, ``"1e"`` and ``"1e+"``
+    are accepted. Invalid starts and irrecoverable forms (``"01"``, ``"+1"``,
+    ``".5"``, ``"1.."``, ``"1.e"``, ``"--1"``, ``"1.-"``) are rejected.
+    """
+    if text in {"", "-"}:
+        return True
+    return _NUMBER_PREFIX_RE.fullmatch(text) is not None
+
+
+def is_complete_number(text: str) -> bool:
+    """Return whether ``text`` matches the full T4.3 JSON number grammar."""
+    return _COMPLETE_NUMBER_RE.fullmatch(text) is not None
+
+
+def _is_boolean_prefix(text: str) -> bool:
+    return any(literal.startswith(text) for literal in _BOOLEAN_LITERALS)
+
+
+def _is_complete_boolean(text: str) -> bool:
+    return text in _BOOLEAN_LITERALS
+
+
 def transition(state: DFAState, char: str) -> DFAState | None:
     """Return the next state after consuming ``char``, or ``None``.
 
     The function is pure and deterministic: it reads no global state, mutates
     nothing, and always returns the same state for the same arguments. Invalid
-    characters and dead ends return ``None``. T4.3 will refine the slot states
-    (catalog name, JSON number grammar, true/false, unicode escapes) without
-    changing this structural dispatch.
+    characters and dead ends return ``None``. Slot validation lives in
+    :meth:`DFA.consume`, not here.
     """
     if not isinstance(state, DFAState):
         return None
