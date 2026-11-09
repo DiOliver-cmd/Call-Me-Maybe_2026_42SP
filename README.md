@@ -21,15 +21,16 @@ an injectable fake. `src/prompt.py` builds a deterministic plain-text prompt
 template; measured sizes are 383–402 tokens with the full 6-function catalog and
 148–167 tokens with a single function. The input catalog, the output call
 models, the JSON loaders and the project-wide error policy are defined and
-validated with Pydantic (166 tests plus a slow round-trip suite against the real
+validated with Pydantic (185 tests plus a slow round-trip suite against the real
 model). The unconstrained baseline (10 prompts, argmax, 48-token cap) produced
 **1/10 valid JSON, 1/10 correct function and 1/10 correct arguments**. The
 budget is `MAX_TOKENS = 48`, a 300 s total deadline and a 180 s per-prompt safety
 valve; on this CPU the worst case is 36.9 min, so the 5-minute target is
 documented as at risk and deferred to T8.4. `src/dfa.py` models the fixed
-output-template machine (`START` through `ACCEPT`, 22 states) and its
-structural/number/literal/escape/whitespace alphabet; transitions are the next
-step (T4.2–T4.4). Full documentation is delivered in the `docs` milestone.
+output-template machine (`START` through `ACCEPT`, 30 states) and its
+structural/number/literal/escape/whitespace alphabet; the pure `transition` and
+stateful `DFA.consume` are implemented, with slot validation and token-level
+consumption next (T4.3–T4.4). Full documentation is delivered in the `docs` milestone.
 
 Baseline measured on the development machine (CPU, Python 3.13):
 
