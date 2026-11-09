@@ -22,6 +22,7 @@ htmlcov/
 # Saída gerada em runtime
 data/output/
 .cache/
+experiments/baseline_outputs.json
 
 # Material de apoio (não faz parte da entrega)
 GUIAS/
