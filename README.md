@@ -16,10 +16,13 @@ allowed set; byte-level fragments are kept and must be handled at the byte level
 `src/llm_client.py` wraps the SDK behind a small typed interface (`encode`,
 `decode`, `logits`, `vocab_path`), normalizing the 2-D encode tensor to a flat
 `list[int]` and logits to a 1-D `float64` array, with a lazy real-model load and
-an injectable fake. The input catalog, the output call models, the JSON loaders
-and the project-wide error policy are defined and validated with Pydantic (132
-tests plus a slow round-trip suite against the real model). Prompt construction
-and the unconstrained baseline are the next steps. Full documentation is
+an injectable fake. `src/prompt.py` builds a deterministic plain-text prompt
+(functions sorted by name, compact JSON, request stripped) without the Qwen chat
+template; measured sizes are 383–402 tokens with the full 6-function catalog and
+148–167 tokens with a single function. The input catalog, the output call
+models, the JSON loaders and the project-wide error policy are defined and
+validated with Pydantic (142 tests plus a slow round-trip suite against the real
+model). The unconstrained baseline is the next step. Full documentation is
 delivered in the `docs` milestone.
 
 Baseline measured on the development machine (CPU, Python 3.13):
