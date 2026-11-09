@@ -6,7 +6,7 @@ Function-calling tool with **constrained decoding** on top of `Qwen/Qwen3-0.6B`:
 the model proposes the next token, a DFA masks every token that would break the
 JSON grammar, and the pipeline writes one function call per user prompt.
 
-Status: M0–M3 complete — `src/vocab.py`
+Status: M0–M3 complete; M4 (grammar/DFA) in progress — `src/vocab.py`
 parses `tokenizer.json` (`model.vocab` + `added_tokens`), builds `token_text` via
 the SDK's public `decode`, and indexes tokens by first character so a step
 filters 151,643 allowed tokens down to a handful before the prefix check. The
@@ -21,13 +21,15 @@ an injectable fake. `src/prompt.py` builds a deterministic plain-text prompt
 template; measured sizes are 383–402 tokens with the full 6-function catalog and
 148–167 tokens with a single function. The input catalog, the output call
 models, the JSON loaders and the project-wide error policy are defined and
-validated with Pydantic (154 tests plus a slow round-trip suite against the real
+validated with Pydantic (166 tests plus a slow round-trip suite against the real
 model). The unconstrained baseline (10 prompts, argmax, 48-token cap) produced
 **1/10 valid JSON, 1/10 correct function and 1/10 correct arguments**. The
 budget is `MAX_TOKENS = 48`, a 300 s total deadline and a 180 s per-prompt safety
 valve; on this CPU the worst case is 36.9 min, so the 5-minute target is
-documented as at risk and deferred to T8.4. Full documentation is delivered in
-the `docs` milestone.
+documented as at risk and deferred to T8.4. `src/dfa.py` models the fixed
+output-template machine (`START` through `ACCEPT`, 22 states) and its
+structural/number/literal/escape/whitespace alphabet; transitions are the next
+step (T4.2–T4.4). Full documentation is delivered in the `docs` milestone.
 
 Baseline measured on the development machine (CPU, Python 3.13):
 
@@ -79,8 +81,8 @@ make clean     # remove caches and generated output
 | M0 — Setup | repository, uv, SDK smoke test, CI, board | done |
 | M1 — Contracts | Pydantic models, loaders, error policy | done |
 | M2 — Vocabulary | tokenizer, `token_text`, indexes | done |
-| M3 — LLM baseline | client, prompt, unconstrained measurement | in progress |
-| M4 — Grammar/DFA | states, slots, transitions | planned |
+| M3 — LLM baseline | client, prompt, unconstrained measurement | done |
+| M4 — Grammar/DFA | states, slots, transitions | in progress |
 | M5 — Decoder | mask, argmax, generation loop | planned |
 | M6 — Pipeline | orchestration, validation, output | planned |
 | M7 — CLI/Packaging | `python -m src`, Makefile targets | planned |
