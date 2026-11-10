@@ -19,7 +19,7 @@ from pydantic import ValidationError
 
 from src.data_loader import PathLike, load_functions, load_prompts
 from src.decoder import NUMBER_EOS_BONUS, decode_call
-from src.errors import DecodingError, ProjectError, SchemaError
+from src.errors import DecodingError, ModelError, ProjectError, SchemaError
 from src.llm_client import LLMClient
 from src.schemas import FunctionCall, FunctionCallBatch
 from src.vocab import (
@@ -73,8 +73,15 @@ def build_decoder_index(
             client,
             range(vocab.vocab_size),
         )
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        save_token_text_cache(cache_file, texts)
+        try:
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            save_token_text_cache(cache_file, texts)
+        except ProjectError:
+            raise
+        except OSError as exc:
+            raise ModelError(
+                f"{cache_file}: could not write token_text cache: {exc}"
+            ) from exc
 
     return build_token_index(vocab, texts)
 
