@@ -30,8 +30,10 @@ __all__ = [
     "FUNCTIONS_END",
     "TemplateSegment",
     "apply_fixed",
+    "build_prefix_segments",
     "build_prompt",
     "build_segments",
+    "build_tail_segments",
     "build_template",
     "count_prompt_tokens",
 ]
@@ -113,6 +115,66 @@ def build_template(
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
+def _fixed_segment(
+    text: str,
+    tokenize: Callable[[str], Sequence[int]],
+) -> TemplateSegment:
+    """Return one fixed segment with ``text`` tokenized once."""
+    return TemplateSegment(
+        kind="fixed",
+        text=text,
+        token_ids=tuple(int(token_id) for token_id in tokenize(text)),
+    )
+
+
+def build_prefix_segments(
+    prompt: str,
+    tokenize: Callable[[str], Sequence[int]],
+) -> tuple[TemplateSegment, ...]:
+    """Return the fixed segments before the function-name slot.
+
+    The prefix is ``{"prompt":``, the JSON-encoded prompt, and ``,"name":"``.
+    The name slot that follows is created by :func:`build_segments`; it is not
+    part of this prefix so the decoder can inject the prefix independently of
+    the function chosen by the model later.
+    """
+    return (
+        _fixed_segment('{"prompt":', tokenize),
+        _fixed_segment(json.dumps(prompt, ensure_ascii=False), tokenize),
+        _fixed_segment(',"name":"', tokenize),
+    )
+
+
+def build_tail_segments(
+    catalog: FunctionCatalog,
+    name: str,
+    tokenize: Callable[[str], Sequence[int]],
+) -> tuple[TemplateSegment, ...]:
+    """Return the fixed/tail segments after the function-name slot.
+
+    The tail starts with the fixed ``","parameters":{`` opener. Each declared
+    parameter contributes an optional fixed comma, its JSON-encoded key plus
+    ``:``, and a model-filled value slot in declaration order. The final fixed
+    ``}}`` closes the parameters object and the root object.
+    """
+    function = _resolve_function(catalog, name)
+    keys = tuple(function.parameters)
+    segments: list[TemplateSegment] = [
+        _fixed_segment('","parameters":{', tokenize)
+    ]
+
+    for index, key in enumerate(keys):
+        if index:
+            segments.append(_fixed_segment(",", tokenize))
+        segments.append(
+            _fixed_segment(json.dumps(key, ensure_ascii=False) + ":", tokenize)
+        )
+        segments.append(TemplateSegment(kind="slot", text="", slot=key))
+
+    segments.append(_fixed_segment("}}", tokenize))
+    return tuple(segments)
+
+
 def build_segments(
     catalog: FunctionCatalog,
     prompt: str,
@@ -128,33 +190,12 @@ def build_segments(
     values yet. Joining the fixed texts with the slot fills reproduces
     :func:`build_template` exactly.
     """
-    function = _resolve_function(catalog, name)
-    keys = tuple(function.parameters)
-    segments: list[TemplateSegment] = []
-
-    def fixed(text: str) -> None:
-        segments.append(
-            TemplateSegment(
-                kind="fixed",
-                text=text,
-                token_ids=tuple(int(token_id) for token_id in tokenize(text)),
-            )
-        )
-
-    fixed('{"prompt":')
-    fixed(json.dumps(prompt, ensure_ascii=False))
-    fixed(',"name":"')
-    segments.append(TemplateSegment(kind="slot", text="", slot="name"))
-    fixed('","parameters":{')
-
-    for index, key in enumerate(keys):
-        if index:
-            fixed(",")
-        fixed(json.dumps(key, ensure_ascii=False) + ":")
-        segments.append(TemplateSegment(kind="slot", text="", slot=key))
-
-    fixed("}}")
-    return tuple(segments)
+    _resolve_function(catalog, name)
+    return (
+        build_prefix_segments(prompt, tokenize)
+        + (TemplateSegment(kind="slot", text="", slot="name"),)
+        + build_tail_segments(catalog, name, tokenize)
+    )
 
 
 def apply_fixed(dfa: DFA, segment: TemplateSegment) -> bool:

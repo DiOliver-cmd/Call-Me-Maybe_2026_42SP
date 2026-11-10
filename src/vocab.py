@@ -453,11 +453,18 @@ def build_token_index(
     fragments available for UTF-8 assembly. The DFA transition cache is
     deferred until state ids exist (T4/T8.3).
     """
+    selected = tokenizer.token_text if texts is None else texts
+    merged = dict(selected)
+    # Added tokens are excluded from the mask, but decoding them yields an
+    # empty string. Keep their raw content so EOS discovery still works with a
+    # decoded index.
+    for added_id in tokenizer.added_ids:
+        raw_text = tokenizer.token_text.get(added_id)
+        if raw_text:
+            merged[added_id] = raw_text
     index_texts = {
         token_id: text
-        for token_id, text in (
-            tokenizer.token_text if texts is None else texts
-        ).items()
+        for token_id, text in merged.items()
         if token_id in tokenizer.token_text
     }
     excluded = excluded_token_ids(tokenizer)
