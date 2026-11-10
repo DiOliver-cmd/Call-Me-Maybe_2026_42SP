@@ -7,9 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from src.errors import DecodingError
+from src.errors import DecodingError, SchemaError
 from src.llm_client import LLMClient
 from src.pipeline import build_decoder_index, run
+from src.schemas import FunctionCall
 from src.vocab import TokenizerIndex
 from tests.fakes import ScriptedLLM
 
@@ -187,6 +188,36 @@ def test_run_wraps_middle_prompt_error_with_position_and_text(
     assert "prompt 1" in message
     assert prompts[1] in message
     assert backend.calls == len(first_call) + 1
+
+
+def test_run_wraps_validation_failure_with_prompt_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    functions_path, prompts_path, prompts = _write_inputs(tmp_path)
+
+    def invalid_decode(*args: object, **kwargs: object) -> FunctionCall:
+        return FunctionCall(
+            prompt=prompts[0],
+            name="fn_missing",
+            parameters={},
+        )
+
+    monkeypatch.setattr("src.pipeline.decode_call", invalid_decode)
+
+    with pytest.raises(DecodingError) as excinfo:
+        run(
+            functions_path,
+            prompts_path,
+            model=LLMClient(backend=ScriptedLLM([])),
+            index=_pipeline_index(),
+        )
+
+    message = str(excinfo.value)
+    assert "prompt 0" in message
+    assert prompts[0] in message
+    assert "fn_missing" in message
+    assert isinstance(excinfo.value.__cause__, SchemaError)
 
 
 def test_build_decoder_index_uses_and_reuses_cache(tmp_path: Path) -> None:

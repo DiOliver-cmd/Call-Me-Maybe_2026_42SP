@@ -30,6 +30,8 @@ from pydantic import (
     model_validator,
 )
 
+from src.errors import SchemaError
+
 # Strict JSON scalars. The strict variants keep the runtime type intact instead
 # of coercing: ``1`` stays ``int``, ``2.0`` stays ``float`` and ``True`` stays
 # ``bool`` even though ``bool`` is a subclass of ``int`` in Python.
@@ -128,6 +130,56 @@ class FunctionCatalog(BaseModel):
             if function.name == name:
                 return function
         raise KeyError(f"function {name!r} is not present in the catalog")
+
+    def validate_call(self, call: FunctionCall) -> FunctionCall:
+        """Validate a decoded call against this catalog as a final safety net.
+
+        The function name must be declared, the parameter keys must match the
+        declaration exactly (every declared parameter is required), and each
+        value must have the declared type. ``bool`` never satisfies ``number``
+        or ``integer`` because :func:`_value_matches_spec` uses strict type
+        identity.
+
+        Raises:
+            SchemaError: if the name is unknown, a parameter is missing or
+                unexpected, or a value has the wrong type.
+
+        Returns:
+            The same ``call`` object, unchanged, so the pipeline can append it.
+        """
+        try:
+            function = self.by_name(call.name)
+        except KeyError as exc:
+            raise SchemaError(
+                f"function {call.name!r} is not declared in the catalog"
+            ) from exc
+
+        declared = function.parameters
+        provided = call.parameters
+        unexpected = sorted(set(provided) - set(declared))
+        if unexpected:
+            raise SchemaError(
+                f"function {function.name!r} received unexpected "
+                f"parameter(s): {', '.join(unexpected)}"
+            )
+
+        missing = sorted(set(declared) - set(provided))
+        if missing:
+            raise SchemaError(
+                f"function {function.name!r} is missing required "
+                f"parameter(s): {', '.join(missing)}"
+            )
+
+        for parameter_name, spec in declared.items():
+            value = provided[parameter_name]
+            if not _value_matches_spec(value, spec.type):
+                expected_label = _EXPECTED_TYPE_LABELS.get(spec.type, spec.type)
+                raise SchemaError(
+                    f"function {function.name!r} parameter "
+                    f"{parameter_name!r} must be {expected_label}, "
+                    f"got {type(value).__name__}"
+                )
+        return call
 
     def __iter__(self) -> Iterator[FunctionDefinition]:  # type: ignore[override]
         return iter(self.functions)

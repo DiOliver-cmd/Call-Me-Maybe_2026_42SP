@@ -1,4 +1,4 @@
-"""Unit tests for the input-side schema models (T1.1)."""
+"""Unit tests for the schema models and call validation (T1.1, T6.2)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from src.schemas import FunctionCatalog
+from src.errors import SchemaError
+from src.schemas import FunctionCall, FunctionCatalog
 
 DATA_FILE = (
     Path(__file__).resolve().parents[1]
@@ -31,6 +32,27 @@ def _minimal_function() -> dict[str, Any]:
         "description": "Echo a value back to the caller.",
         "returns": {"type": "string"},
     }
+
+
+def _function_with(
+    name: str,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    raw = _minimal_function()
+    raw["name"] = name
+    raw["parameters"] = parameters
+    return raw
+
+
+def _validation_catalog() -> FunctionCatalog:
+    return FunctionCatalog.model_validate(
+        [
+            _function_with("fn_text", {"text": {"type": "string"}}),
+            _function_with("fn_number", {"value": {"type": "number"}}),
+            _function_with("fn_flag", {"enabled": {"type": "boolean"}}),
+            _function_with("fn_zero", {}),
+        ]
+    )
 
 
 def test_real_catalog_validates() -> None:
@@ -104,3 +126,113 @@ def test_unknown_function_lookup_raises_key_error() -> None:
 
     with pytest.raises(KeyError, match="fn_missing"):
         catalog.by_name("fn_missing")
+
+
+@pytest.mark.parametrize(
+    ("name", "parameters"),
+    [
+        ("fn_text", {"text": "hello"}),
+        ("fn_number", {"value": 2}),
+        ("fn_number", {"value": 2.5}),
+        ("fn_flag", {"enabled": True}),
+        ("fn_zero", {}),
+    ],
+)
+def test_validate_call_accepts_declared_signature(
+    name: str,
+    parameters: dict[str, Any],
+) -> None:
+    catalog = _validation_catalog()
+    call = FunctionCall(prompt="prompt", name=name, parameters=parameters)
+
+    assert catalog.validate_call(call) is call
+
+
+def test_validate_call_rejects_unknown_name() -> None:
+    catalog = _validation_catalog()
+    call = FunctionCall(prompt="prompt", name="fn_missing", parameters={})
+
+    with pytest.raises(
+        SchemaError,
+        match=r"function 'fn_missing' is not declared in the catalog",
+    ):
+        catalog.validate_call(call)
+
+
+def test_validate_call_rejects_missing_parameter() -> None:
+    catalog = _validation_catalog()
+    call = FunctionCall(prompt="prompt", name="fn_text", parameters={})
+
+    with pytest.raises(
+        SchemaError,
+        match=r"function 'fn_text' is missing required parameter\(s\): text",
+    ):
+        catalog.validate_call(call)
+
+
+def test_validate_call_rejects_extra_parameter() -> None:
+    catalog = _validation_catalog()
+    call = FunctionCall(
+        prompt="prompt",
+        name="fn_zero",
+        parameters={"extra": 1},
+    )
+
+    with pytest.raises(
+        SchemaError,
+        match=r"function 'fn_zero' received unexpected parameter\(s\): extra",
+    ):
+        catalog.validate_call(call)
+
+
+def test_validate_call_rejects_bool_for_number() -> None:
+    catalog = _validation_catalog()
+    call = FunctionCall(
+        prompt="prompt",
+        name="fn_number",
+        parameters={"value": True},
+    )
+
+    with pytest.raises(
+        SchemaError,
+        match=(
+            r"function 'fn_number' parameter 'value' must be a number "
+            r"\(int or float, not bool\), got bool"
+        ),
+    ):
+        catalog.validate_call(call)
+
+
+def test_validate_call_rejects_int_for_string() -> None:
+    catalog = _validation_catalog()
+    call = FunctionCall(
+        prompt="prompt",
+        name="fn_text",
+        parameters={"text": 1},
+    )
+
+    with pytest.raises(
+        SchemaError,
+        match=(
+            r"function 'fn_text' parameter 'text' must be a string, got int"
+        ),
+    ):
+        catalog.validate_call(call)
+
+
+def test_validate_call_rejects_str_for_boolean() -> None:
+    catalog = _validation_catalog()
+    call = FunctionCall(
+        prompt="prompt",
+        name="fn_flag",
+        parameters={"enabled": "true"},
+    )
+
+    with pytest.raises(
+        SchemaError,
+        match=(
+            r"function 'fn_flag' parameter 'enabled' must be a boolean, "
+            r"got str"
+        ),
+    ):
+        catalog.validate_call(call)
