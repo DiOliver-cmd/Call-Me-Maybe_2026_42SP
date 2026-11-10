@@ -6,10 +6,12 @@ Function-calling tool with **constrained decoding** on top of `Qwen/Qwen3-0.6B`:
 the model proposes the next token, a DFA masks every token that would break the
 JSON grammar, and the pipeline writes one function call per user prompt.
 
-Status: M0–M3 complete; M4 (grammar/DFA) in progress — `src/vocab.py`
+Status: M0–M4 complete; M5 (decoder) in progress — `src/vocab.py`
 parses `tokenizer.json` (`model.vocab` + `added_tokens`), builds `token_text` via
 the SDK's public `decode`, and indexes tokens by first character so a step
-filters 151,643 allowed tokens down to a handful before the prefix check. The
+narrows the 151,643 allowed tokens before the prefix/DFA check; structural
+states fall to a handful, while permissive string states can keep almost all of
+them. The
 analysis excludes all 26 added control tokens (14 special + 12 markers such as
 `<tool_call>` and `<think>`) and the 267 model padding ids from the decoder's
 allowed set; byte-level fragments are kept and must be handled at the byte level.
@@ -21,7 +23,7 @@ an injectable fake. `src/prompt.py` builds a deterministic plain-text prompt
 template; measured sizes are 383–402 tokens with the full 6-function catalog and
 148–167 tokens with a single function. The input catalog, the output call
 models, the JSON loaders and the project-wide error policy are defined and
-validated with Pydantic (399 tests: 398 passing, one documented xfail, plus a
+validated with Pydantic (416 tests: 415 passing, one documented xfail, plus a
 slow round-trip suite against the real model). The unconstrained baseline
 (10 prompts, argmax, 48-token cap) produced
 **1/10 valid JSON, 1/10 correct function and 1/10 correct arguments**. The
@@ -32,10 +34,22 @@ output-template machine (`START` through `ACCEPT`, 30 states) and its
 structural/number/literal/escape/whitespace alphabet; the pure `transition`,
 stateful `DFA.consume`, and atomic `DFA.consume_token`/`try_consume_token` are
 implemented, including validation for function names, JSON strings/escapes,
-numbers and booleans. `src/prompt.py` assembles the fixed-key output template
-and splits it into tokenized fixed segments plus model-filled slots for direct
-injection into the DFA; the T4.6 DFA matrix is next. Full documentation is
-delivered in the `docs` milestone.
+numbers and booleans, with the T4.6 case matrix covering structural, slot,
+boundary and multi-character-token cases. `src/prompt.py` assembles the
+fixed-key output template and splits it into tokenized fixed segments plus
+model-filled slots for direct injection into the DFA. `src/decoder.py` adds the
+slot-scoped T5.1 mask: `allowed_token_ids` returns `()` outside model-filled
+slots so fixed text is always injected, rejects multi-character tokens that
+cross into a fixed closing quote/comma/brace, and never mutates the input
+machine. `slot_can_stop` marks complete name/number/boolean values for T5.3 EOS
+handling. The decoded-cache benchmark (5-run median after one warm-up, measured
+on the development machine; wall-clock varies about ±20%) measured
+NAME_VALUE 2 candidates/101 ms, PARAM_VALUE_START 302/512 ms,
+PARAM_VALUE_STRING 147k/2971 ms, PARAM_VALUE_NUMBER 13/654 ms,
+PARAM_VALUE_BOOLEAN 2/90 ms, PARAM_VALUE_DONE 0/0 ms and ACCEPT 0/0 ms per step.
+The string-value state still validates ~150k token texts across 17,773/17,805
+buckets, so its fast path and caching work remain deferred to T8.3. Full
+documentation is delivered in the `docs` milestone.
 
 Baseline measured on the development machine (CPU, Python 3.13):
 
@@ -88,8 +102,8 @@ make clean     # remove caches and generated output
 | M1 — Contracts | Pydantic models, loaders, error policy | done |
 | M2 — Vocabulary | tokenizer, `token_text`, indexes | done |
 | M3 — LLM baseline | client, prompt, unconstrained measurement | done |
-| M4 — Grammar/DFA | states, slots, transitions | in progress |
-| M5 — Decoder | mask, argmax, generation loop | planned |
+| M4 — Grammar/DFA | states, slots, transitions | done |
+| M5 — Decoder | mask, argmax, generation loop | in progress |
 | M6 — Pipeline | orchestration, validation, output | planned |
 | M7 — CLI/Packaging | `python -m src`, Makefile targets | planned |
 | M8 — Hardening | errors, performance, accuracy | planned |
