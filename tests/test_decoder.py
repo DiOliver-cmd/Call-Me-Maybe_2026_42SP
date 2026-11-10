@@ -1,4 +1,4 @@
-"""Unit tests for slot-scoped constrained-decoding token masks (T5.1)."""
+"""Unit tests for constrained decoding masks and the T5.3 generation loop."""
 
 from __future__ import annotations
 
@@ -9,13 +9,18 @@ import numpy as np
 import pytest
 
 from src.decoder import (
+    _resolve_eos_token_id,
     allowed_token_ids,
+    decode_call,
     masked_logits,
     select_next_token,
     slot_can_stop,
 )
 from src.dfa import DFA, DFAState
 from src.errors import DecodingError
+from src.llm_client import LLMClient
+from src.prompt import build_template
+from src.schemas import FunctionCall, FunctionCatalog
 from src.vocab import TokenizerIndex, TokenizerVocab, build_token_index
 
 _NAMES = [
@@ -644,3 +649,330 @@ def test_realistic_vocab_size_mask_has_only_two_finite_scores() -> None:
     assert masked.dtype == np.float64
     assert int(np.isfinite(masked).sum()) == 2
     assert select_next_token(logits, allowed) == 150000
+
+
+# T5.3: generation loop with fixed injection, EOS and MAX_TOKENS.
+
+_DECODER_CHARS = 'abcdefghijklmnopqrstuvwxyz_" 0123456789.-'
+_EOS_ID = 1000
+_EOS_TEXT = "<|im_end|>"
+
+
+def _decoder_catalog() -> FunctionCatalog:
+    """Catalog containing name-prefix and parameter-shape edge cases."""
+    return FunctionCatalog.from_list(
+        [
+            {
+                "name": "fn_add",
+                "description": "Add nothing.",
+                "parameters": {},
+                "returns": {"type": "string"},
+            },
+            {
+                "name": "fn_add_numbers",
+                "description": "Add two numbers.",
+                "parameters": {
+                    "a": {"type": "number"},
+                    "b": {"type": "number"},
+                },
+                "returns": {"type": "number"},
+            },
+            {
+                "name": "fn_greet",
+                "description": "Greet someone.",
+                "parameters": {"name": {"type": "string"}},
+                "returns": {"type": "string"},
+            },
+            {
+                "name": "fn_ping",
+                "description": "Ping.",
+                "parameters": {},
+                "returns": {"type": "string"},
+            },
+        ]
+    )
+
+
+def _decoder_index(
+    *,
+    chars: str = _DECODER_CHARS,
+    eos_id: int | None = _EOS_ID,
+    eos_text: str = _EOS_TEXT,
+) -> TokenizerIndex:
+    """Build a char-token index; the EOS text is mapped but never allowed."""
+    texts = {ord(char): char for char in sorted(set(chars))}
+    allowed_ids = tuple(sorted(texts))
+    if eos_id is not None:
+        texts[eos_id] = eos_text
+
+    buckets: dict[str, list[int]] = {}
+    for token_id in allowed_ids:
+        text = texts[token_id]
+        if text:
+            buckets.setdefault(text[0], []).append(token_id)
+    return TokenizerIndex(
+        texts=texts,
+        allowed_ids=allowed_ids,
+        by_first_char={
+            char: tuple(token_ids) for char, token_ids in buckets.items()
+        },
+    )
+
+
+def _tokens(text: str) -> list[int]:
+    """Return one token id per character, matching the char-token index."""
+    return [ord(char) for char in text]
+
+
+class _ScriptedBackend:
+    """Model fake whose logits always favour the next scripted token id."""
+
+    def __init__(
+        self,
+        script: list[int],
+        *,
+        size: int = 2048,
+        all_masked_at: int | None = None,
+    ) -> None:
+        self.script = list(script)
+        self.size = size
+        self.all_masked_at = all_masked_at
+        self.calls = 0
+        self.encode_calls: list[str] = []
+        self.decode_calls: list[list[int]] = []
+
+    def encode(self, text: str) -> list[list[int]]:
+        self.encode_calls.append(text)
+        return [_tokens(text)]
+
+    def decode(self, ids: list[int]) -> str:
+        self.decode_calls.append(list(ids))
+        return "".join(chr(token_id) for token_id in ids)
+
+    def get_logits_from_input_ids(self, input_ids: list[int]) -> list[float]:
+        self.calls += 1
+        if self.all_masked_at == self.calls:
+            return [float("-inf")] * self.size
+        if not self.script:
+            raise AssertionError("logits called after the script was exhausted")
+
+        token_id = self.script.pop(0)
+        logits = [-1.0] * self.size
+        logits[token_id] = 10.0
+        return logits
+
+    def get_path_to_vocab_file(self) -> str:
+        return "unused"
+
+
+def _scripted_model(
+    script: list[int],
+    **kwargs: Any,
+) -> tuple[LLMClient, _ScriptedBackend]:
+    backend = _ScriptedBackend(script, **kwargs)
+    return LLMClient(backend=backend), backend
+
+
+def test_decode_call_controlled_string_case() -> None:
+    catalog = _decoder_catalog()
+    script = _tokens("fn_greet") + [_EOS_ID] + _tokens('"bob"')
+    model, backend = _scripted_model(script)
+
+    call = decode_call(model, catalog, "Greet bob", index=_decoder_index())
+
+    expected = build_template(
+        catalog,
+        "Greet bob",
+        "fn_greet",
+        {"name": "bob"},
+    )
+    assert backend.calls == len(script)
+    assert backend.script == []
+    assert "".join(chr(i) for i in backend.decode_calls[-1]) == expected
+    assert call == FunctionCall(
+        prompt="Greet bob",
+        name="fn_greet",
+        parameters={"name": "bob"},
+    )
+
+
+def test_decode_call_empty_parameter_case() -> None:
+    catalog = _decoder_catalog()
+    script = _tokens("fn_ping") + [_EOS_ID]
+    model, backend = _scripted_model(script)
+
+    call = decode_call(model, catalog, "Ping", index=_decoder_index())
+
+    assert call == FunctionCall(prompt="Ping", name="fn_ping", parameters={})
+    assert backend.calls == len(script)
+
+
+def test_decode_call_does_not_extend_complete_prefix_name() -> None:
+    catalog = _decoder_catalog()
+    script = _tokens("fn_add") + [_EOS_ID]
+    model, backend = _scripted_model(script)
+
+    call = decode_call(model, catalog, "Add", index=_decoder_index())
+
+    assert call.name == "fn_add"
+    assert call.parameters == {}
+    assert backend.calls == len(script)
+
+
+def test_decode_call_preserves_prompt_quotes_and_unicode() -> None:
+    catalog = _decoder_catalog()
+    prompt = 'say "hi" José'
+    script = _tokens("fn_greet") + [_EOS_ID] + _tokens('"bob"')
+    model, backend = _scripted_model(script)
+
+    call = decode_call(model, catalog, prompt, index=_decoder_index())
+
+    expected = build_template(
+        catalog,
+        prompt,
+        "fn_greet",
+        {"name": "bob"},
+    )
+    assert call.prompt == prompt
+    assert "".join(chr(i) for i in backend.decode_calls[-1]) == expected
+    assert backend.calls == len(script)
+
+
+def test_decode_call_aborts_at_max_tokens() -> None:
+    catalog = _decoder_catalog()
+    script = _tokens("fn_greet") + [_EOS_ID] + _tokens('"bob"')
+    model, backend = _scripted_model(script)
+
+    with pytest.raises(DecodingError, match="MAX_TOKENS"):
+        decode_call(
+            model,
+            catalog,
+            "Greet bob",
+            index=_decoder_index(),
+            max_tokens=2,
+        )
+
+    assert backend.calls == 2
+
+
+def test_decode_call_counts_eos_against_max_tokens() -> None:
+    catalog = _decoder_catalog()
+    script = _tokens("fn_greet") + [_EOS_ID] + _tokens('"bob"')
+    model, backend = _scripted_model(script)
+
+    with pytest.raises(DecodingError, match="MAX_TOKENS"):
+        decode_call(
+            model,
+            catalog,
+            "Greet bob",
+            index=_decoder_index(),
+            max_tokens=len(_tokens("fn_greet")),
+        )
+
+    assert backend.calls == len(_tokens("fn_greet"))
+
+
+@pytest.mark.parametrize("marker", ["<|im_end|>", "<|endoftext|>"])
+def test_decode_call_resolves_eos_marker(marker: str) -> None:
+    catalog = _decoder_catalog()
+    eos_id = 1001
+    index = _decoder_index(eos_id=eos_id, eos_text=marker)
+    script = _tokens("fn_greet") + [eos_id] + _tokens('"bob"')
+    model, backend = _scripted_model(script)
+
+    call = decode_call(model, catalog, "Greet bob", index=index)
+
+    assert call.name == "fn_greet"
+    assert backend.calls == len(script)
+
+
+def test_build_token_index_preserves_added_text_for_eos() -> None:
+    vocab = TokenizerVocab(
+        token_text={ord("a"): "a", _EOS_ID: _EOS_TEXT},
+        special_ids=frozenset({_EOS_ID}),
+        added_ids=frozenset({_EOS_ID}),
+        source="test",
+    )
+    index = build_token_index(
+        vocab,
+        texts={ord("a"): "a", _EOS_ID: ""},
+    )
+
+    assert index.texts[_EOS_ID] == _EOS_TEXT
+    assert _EOS_ID not in index.allowed_ids
+    assert _resolve_eos_token_id(index, None) == _EOS_ID
+
+
+def test_decode_call_wraps_invalid_schema_as_decoding_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = _decoder_catalog()
+    script = _tokens("fn_ping") + [_EOS_ID]
+    model, backend = _scripted_model(script)
+    monkeypatch.setattr(backend, "decode", lambda ids: "{not json")
+
+    with pytest.raises(DecodingError, match="not a valid FunctionCall"):
+        decode_call(model, catalog, "Ping", index=_decoder_index())
+
+
+def test_decode_call_requires_a_resolvable_eos() -> None:
+    catalog = _decoder_catalog()
+    model, backend = _scripted_model([])
+
+    with pytest.raises(DecodingError, match="EOS"):
+        decode_call(
+            model,
+            catalog,
+            "Greet bob",
+            index=_decoder_index(eos_id=None),
+        )
+
+    assert backend.calls == 0
+
+
+def test_decode_call_all_masked_slot_raises() -> None:
+    catalog = _decoder_catalog()
+    script = _tokens("fn_greet") + [_EOS_ID] + _tokens('"bob"')
+    model, backend = _scripted_model(script, all_masked_at=1)
+
+    with pytest.raises(DecodingError, match="no valid token"):
+        decode_call(model, catalog, "Greet bob", index=_decoder_index())
+
+    assert backend.calls == 1
+
+
+def test_decode_call_empty_slot_mask_raises_before_logits() -> None:
+    catalog = _decoder_catalog()
+    model, backend = _scripted_model([])
+
+    with pytest.raises(DecodingError, match="no allowed tokens"):
+        decode_call(
+            model,
+            catalog,
+            "Greet bob",
+            index=_decoder_index(chars="x"),
+        )
+
+    assert backend.calls == 0
+
+
+def test_decode_call_fills_multiple_number_slots_with_eos() -> None:
+    catalog = _decoder_catalog()
+    script = (
+        _tokens("fn_add_numbers")
+        + [_EOS_ID]
+        + _tokens("1")
+        + [_EOS_ID]
+        + _tokens("2")
+        + [_EOS_ID]
+    )
+    model, backend = _scripted_model(script)
+
+    call = decode_call(model, catalog, "Add", index=_decoder_index())
+
+    assert call == FunctionCall(
+        prompt="Add",
+        name="fn_add_numbers",
+        parameters={"a": 1, "b": 2},
+    )
+    assert backend.calls == len(script)

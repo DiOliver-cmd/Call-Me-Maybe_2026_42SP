@@ -1,11 +1,11 @@
-"""Slot-scoped constrained-decoding masks and logits selection (T5.1-T5.2).
+"""Constrained JSON generation for function calls (T5.1-T5.3).
 
-The decoder only asks for tokens while the DFA is inside a model-filled slot.
-Fixed template text is injected by the decoder and must never be emitted by the
-model, so :func:`allowed_token_ids` returns ``()`` in every injected state.
-:func:`masked_logits` applies ``-inf`` outside the allowed set and
-:func:`select_next_token` performs the guarded argmax; the generation loop and
-EOS handling remain in T5.3.
+The decoder only asks the model for tokens while the DFA is inside a
+model-filled slot. Fixed template text is injected by the decoder and must never
+be emitted by the model, so :func:`allowed_token_ids` returns ``()`` in every
+injected state. :func:`masked_logits` applies ``-inf`` outside the allowed set,
+:func:`select_next_token` performs the guarded argmax, and :func:`decode_call`
+alternates fixed injection with slot generation until ``ACCEPT``.
 
 No transition cache is used here. A cache key would need the whole DFA state,
 including ``name_buffer``, ``number_buffer``, ``literal_buffer`` and
@@ -20,13 +20,24 @@ from collections.abc import Iterable
 
 import numpy as np
 from numpy.typing import ArrayLike
+from pydantic import ValidationError
 
+from src.config import MAX_TOKENS
 from src.dfa import DFA, DFAState, is_complete_number
 from src.errors import DecodingError
+from src.llm_client import LLMClient
+from src.prompt import (
+    TemplateSegment,
+    build_prefix_segments,
+    build_prompt,
+    build_tail_segments,
+)
+from src.schemas import FunctionCall, FunctionCatalog
 from src.vocab import TokenizerIndex
 
 __all__ = [
     "allowed_token_ids",
+    "decode_call",
     "masked_logits",
     "select_next_token",
     "slot_can_stop",
@@ -223,3 +234,145 @@ def slot_can_stop(dfa: DFA) -> bool:
         return dfa.literal_buffer in {"true", "false"}
 
     return False
+
+
+def _resolve_eos_token_id(
+    index: TokenizerIndex,
+    eos_token_id: int | None,
+) -> int:
+    """Return the caller's EOS id or discover the project's preferred marker."""
+    if eos_token_id is not None:
+        return eos_token_id
+
+    for marker in ("<|im_end|>", "<|endoftext|>"):
+        for token_id, text in index.texts.items():
+            if text == marker:
+                return token_id
+
+    raise DecodingError(
+        "cannot resolve EOS token: index contains neither "
+        "<|im_end|> nor <|endoftext|>"
+    )
+
+
+def decode_call(
+    model: LLMClient,
+    functions: FunctionCatalog,
+    prompt: str,
+    *,
+    index: TokenizerIndex,
+    eos_token_id: int | None = None,
+    max_tokens: int = MAX_TOKENS,
+) -> FunctionCall:
+    """Decode one complete function call without asking for fixed text.
+
+    Fixed template segments are injected with ``model.encode`` and never call
+    ``model.logits``. Only function-name and parameter-value slots consume model
+    steps. A step is counted for every ``model.logits`` call, including a call
+    that selects EOS; when the next step would exceed ``max_tokens`` the decoder
+    raises :class:`DecodingError` before calling the model again.
+
+    The returned :class:`FunctionCall` is parsed from the complete generated
+    template. Any DFA, budget or schema failure raises an exception instead of
+    returning a partial call.
+    """
+    eos = _resolve_eos_token_id(index, eos_token_id)
+    dfa = DFA.start([function.name for function in functions])
+
+    prompt_ids = model.encode(build_prompt(functions, prompt))
+    input_ids: list[int] = list(prompt_ids)
+    output_ids: list[int] = []
+    steps = 0
+
+    def inject(segment: TemplateSegment) -> None:
+        """Append one fixed segment without a logits call."""
+        if not dfa.consume_token(segment.text):
+            raise DecodingError(
+                f"fixed template segment rejected by the DFA: "
+                f"{segment.text!r}"
+            )
+        input_ids.extend(segment.token_ids)
+        output_ids.extend(segment.token_ids)
+
+    def next_token(candidates: tuple[int, ...]) -> int:
+        """Call the model once and select one candidate within the budget."""
+        nonlocal steps
+        if steps >= max_tokens:
+            raise DecodingError(
+                f"MAX_TOKENS exceeded: {steps} model step(s) already used "
+                f"(limit {max_tokens})"
+            )
+        logits = model.logits(input_ids)
+        steps += 1
+        return select_next_token(logits, candidates)
+
+    for segment in build_prefix_segments(prompt, model.encode):
+        inject(segment)
+
+    while dfa.state is DFAState.NAME_VALUE:
+        allowed = allowed_token_ids(dfa, index)
+        candidates = allowed + ((eos,) if slot_can_stop(dfa) else ())
+        if not candidates:
+            raise DecodingError(
+                f"no allowed tokens in {dfa.state.name}; cannot choose a name"
+            )
+
+        token = next_token(candidates)
+        if token == eos:
+            break
+
+        if not dfa.consume_token(index.texts[token]):
+            raise DecodingError(
+                f"selected name token {token} rejected by the DFA"
+            )
+        input_ids.append(token)
+        output_ids.append(token)
+
+    if dfa.names is None or not dfa.names.is_complete(dfa.name_buffer):
+        raise DecodingError(
+            f"incomplete function name {dfa.name_buffer!r} at EOS"
+        )
+    name = dfa.name_buffer
+
+    for segment in build_tail_segments(functions, name, model.encode):
+        if segment.kind == "fixed":
+            inject(segment)
+            continue
+
+        while dfa.state is not DFAState.PARAM_VALUE_DONE:
+            allowed = allowed_token_ids(dfa, index)
+            candidates = allowed + ((eos,) if slot_can_stop(dfa) else ())
+            if not candidates:
+                raise DecodingError(
+                    f"no allowed tokens in {dfa.state.name}; "
+                    f"cannot fill parameter {segment.slot!r}"
+                )
+
+            token = next_token(candidates)
+            if token == eos:
+                break
+
+            if not dfa.consume_token(index.texts[token]):
+                raise DecodingError(
+                    f"selected value token {token} rejected by the DFA"
+                )
+            input_ids.append(token)
+            output_ids.append(token)
+
+        if not (dfa.state is DFAState.PARAM_VALUE_DONE or slot_can_stop(dfa)):
+            raise DecodingError(
+                f"incomplete value for parameter {segment.slot!r} at EOS"
+            )
+
+    if not dfa.is_accepting():
+        raise DecodingError(
+            f"decoder stopped in {dfa.state.name}; expected ACCEPT"
+        )
+
+    decoded = model.decode(output_ids)
+    try:
+        return FunctionCall.model_validate_json(decoded)
+    except ValidationError as exc:
+        raise DecodingError(
+            f"decoded call is not a valid FunctionCall: {exc}"
+        ) from exc
