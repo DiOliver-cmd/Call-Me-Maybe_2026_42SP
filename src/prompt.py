@@ -35,6 +35,7 @@ __all__ = [
     "build_segments",
     "build_tail_segments",
     "build_template",
+    "build_verbose_prompt",
     "count_prompt_tokens",
 ]
 
@@ -207,13 +208,60 @@ def apply_fixed(dfa: DFA, segment: TemplateSegment) -> bool:
     return dfa.consume_token(segment.text)
 
 
-def build_prompt(catalog: FunctionCatalog, request: str) -> str:
-    """Build a deterministic plain-text prompt for ``request``.
+def _compact_signature(function: FunctionDefinition) -> str:
+    """Render one function as ``name(param:type, ...): description``.
 
-    Functions are sorted by name and serialized with sorted keys and compact
-    separators, so the same catalog always produces the same bytes regardless
-    of its declaration order. The request is only stripped; its content is
-    never rewritten.
+    The signature carries everything the model needs to choose a function and
+    fill its parameters: the name, the parameter names and their types, and the
+    natural-language description. Return types are omitted because the model
+    never emits them: the decoder injects the fixed output template and the
+    model only fills the name and the parameter values.
+    """
+    params = ", ".join(
+        f"{name}:{spec.type}" for name, spec in function.parameters.items()
+    )
+    head = f"{function.name}({params})"
+    if function.description:
+        return f"{head}: {function.description}"
+    return head
+
+
+def build_prompt(catalog: FunctionCatalog, request: str) -> str:
+    """Build the compact production prompt for ``request`` (T8.4).
+
+    Every model step re-reads the whole prompt because the public SDK exposes no
+    KV cache, so prompt size is a direct multiplier on the run time. This format
+    therefore replaces the verbose JSON catalog of T3.2 with one signature line
+    per function: same names, parameters, types and descriptions, roughly a
+    third of the tokens (see ``experiments/benchmark.md``).
+
+    Functions are sorted by name, so the same catalog always produces the same
+    bytes regardless of its declaration order. The request is only stripped;
+    its content is never rewritten.
+    """
+    lines = [
+        FUNCTIONS_BEGIN,
+        *(_compact_signature(function) for function in _sorted_functions(catalog)),
+        FUNCTIONS_END,
+        "",
+        f"Request: {request.strip()}",
+        "",
+        "Return one JSON object for the request using exactly one function.",
+    ]
+    return "\n".join(lines)
+
+
+def _sorted_functions(catalog: FunctionCatalog) -> list[FunctionDefinition]:
+    """Return the catalog functions ordered by name."""
+    return sorted(catalog.functions, key=lambda function: function.name)
+
+
+def build_verbose_prompt(catalog: FunctionCatalog, request: str) -> str:
+    """Build the verbose T3.2 prompt used as the T8.4 comparison baseline.
+
+    The production pipeline uses :func:`build_prompt` instead. This variant is
+    kept verbatim so the benchmark can measure both formats on the same machine
+    and so the size report can show the reduction.
     """
     functions_json = json.dumps(
         [

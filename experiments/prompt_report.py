@@ -1,7 +1,8 @@
-"""Prompt size report for the function-calling prompt (T3.2).
+"""Prompt size report for the function-calling prompt (T3.2/T8.4).
 
 Measures character and token lengths for every prompt in
-``data/input/function_calling_tests.json`` with the full catalog and with the
+``data/input/function_calling_tests.json``: the compact production format and
+the verbose T3.2 format with the full catalog, plus the compact format with the
 first function only. The report is deterministic: no timings are recorded.
 
 Run with::
@@ -15,7 +16,7 @@ from pathlib import Path
 
 from src.data_loader import load_functions, load_prompts
 from src.llm_client import LLMClient
-from src.prompt import build_prompt, count_prompt_tokens
+from src.prompt import build_prompt, build_verbose_prompt, count_prompt_tokens
 from src.schemas import FunctionCatalog
 
 FUNCTIONS_PATH = Path("data/input/functions_definition.json")
@@ -23,6 +24,11 @@ PROMPTS_PATH = Path("data/input/function_calling_tests.json")
 REPORT_PATH = Path("experiments/prompt_report.md")
 
 REQUEST_LIMIT = 60
+
+PROMPT_BUILDERS = {
+    "compact": build_prompt,
+    "verbose": build_verbose_prompt,
+}
 
 
 def _truncate(text: str, limit: int = REQUEST_LIMIT) -> str:
@@ -53,15 +59,18 @@ def main() -> None:
 
     rows: list[list[str]] = []
     for index, request in enumerate(prompts):
-        for label, active_catalog in (
-            ("full", catalog),
-            ("1-function", one_function),
+        for label, style, active_catalog in (
+            ("full", "compact", catalog),
+            ("full", "verbose", catalog),
+            ("1-function", "compact", one_function),
         ):
-            prompt = build_prompt(active_catalog, request)
+            builder = PROMPT_BUILDERS[style]
+            prompt = builder(active_catalog, request)
             rows.append(
                 [
                     str(index),
                     label,
+                    style,
                     _cell(repr(_truncate(request))),
                     str(len(prompt)),
                     str(count_prompt_tokens(client, prompt)),
@@ -92,6 +101,7 @@ def main() -> None:
             [
                 "prompt",
                 "catalog",
+                "format",
                 "request",
                 "chars",
                 "tokens",
