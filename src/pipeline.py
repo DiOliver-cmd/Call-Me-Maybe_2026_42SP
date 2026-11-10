@@ -95,15 +95,14 @@ def run(
     calls: list[FunctionCall] = []
     for prompt_index, prompt in enumerate(prompts):
         try:
-            calls.append(
-                decode_call(
-                    client,
-                    catalog,
-                    prompt,
-                    index=decoder_index,
-                    eos_token_id=eos_token_id,
-                )
+            call = decode_call(
+                client,
+                catalog,
+                prompt,
+                index=decoder_index,
+                eos_token_id=eos_token_id,
             )
+            calls.append(catalog.validate_call(call))
         except ProjectError as exc:
             raise DecodingError(
                 f"prompt {prompt_index} ({prompt!r}) failed: {exc}"
