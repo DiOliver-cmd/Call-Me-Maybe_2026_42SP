@@ -15,7 +15,7 @@ from typing import Any, Protocol, cast
 
 import numpy as np
 
-from src.errors import ModelError
+from src.errors import ModelError, ProjectError
 
 __all__ = ["LLMBackend", "LLMClient"]
 
@@ -56,22 +56,46 @@ class LLMClient:
         self._backend = backend
 
     def _get_backend(self) -> LLMBackend:
-        """Return the injected backend or lazily construct the real model."""
+        """Return the injected backend or lazily construct the real model.
+
+        Construction can fail while importing or initializing the SDK (missing
+        assets, incompatible runtime, no network on first download). Every such
+        failure becomes a :class:`ModelError`, while an already typed
+        :class:`ProjectError` is re-raised unchanged so it is never double-wrapped.
+        """
         backend = self._backend
         if backend is None:
-            from llm_sdk import Small_LLM_Model
+            try:
+                from llm_sdk import Small_LLM_Model
 
-            backend = cast(LLMBackend, Small_LLM_Model())
+                backend = cast(LLMBackend, Small_LLM_Model())
+            except ProjectError:
+                raise
+            except Exception as exc:
+                raise ModelError(f"failed to load the model: {exc}") from exc
             self._backend = backend
         return backend
 
     def encode(self, text: str) -> list[int]:
         """Return flat token ids for ``text``."""
-        return _normalize_ids(self._get_backend().encode(text))
+        backend = self._get_backend()
+        try:
+            raw = backend.encode(text)
+        except ProjectError:
+            raise
+        except Exception as exc:
+            raise ModelError(f"encode failed: {exc}") from exc
+        return _normalize_ids(raw)
 
     def decode(self, ids: list[int]) -> str:
         """Decode flat token ids to text."""
-        result = self._get_backend().decode(list(ids))
+        backend = self._get_backend()
+        try:
+            result = backend.decode(list(ids))
+        except ProjectError:
+            raise
+        except Exception as exc:
+            raise ModelError(f"decode failed: {exc}") from exc
         if not isinstance(result, str):
             raise ModelError(
                 f"decode returned {type(result).__name__}; expected str"
@@ -84,16 +108,34 @@ class LLMClient:
         With the real model the vector has one value per vocabulary position
         (151,936, including the 267 padding ids).
         """
-        raw = self._get_backend().get_logits_from_input_ids(list(ids))
+        backend = self._get_backend()
+        try:
+            raw = backend.get_logits_from_input_ids(list(ids))
+        except ProjectError:
+            raise
+        except Exception as exc:
+            raise ModelError(f"logits failed: {exc}") from exc
         return _normalize_logits(raw)
 
     def vocab_path(self) -> str:
         """Return the path to the vocabulary asset."""
-        return self._get_backend().get_path_to_vocab_file()
+        backend = self._get_backend()
+        try:
+            return backend.get_path_to_vocab_file()
+        except ProjectError:
+            raise
+        except Exception as exc:
+            raise ModelError(f"vocab_path failed: {exc}") from exc
 
     def tokenizer_path(self) -> str:
         """Return the path to the tokenizer asset."""
-        return self._get_backend().get_path_to_tokenizer_file()
+        backend = self._get_backend()
+        try:
+            return backend.get_path_to_tokenizer_file()
+        except ProjectError:
+            raise
+        except Exception as exc:
+            raise ModelError(f"tokenizer_path failed: {exc}") from exc
 
 
 def _normalize_ids(value: Any) -> list[int]:

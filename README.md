@@ -23,8 +23,8 @@ an injectable fake. `src/prompt.py` builds a deterministic plain-text prompt
 template; measured sizes are 383–402 tokens with the full 6-function catalog and
 148–167 tokens with a single function. The input catalog, the output call
 models, the JSON loaders and the project-wide error policy are defined and
-validated with Pydantic (489 tests: 488 passing, one documented xfail, plus a
-slow round-trip suite against the real model). The unconstrained baseline
+validated with Pydantic (515 tests passing, one documented xfail, plus a slow
+round-trip suite against the real model). The unconstrained baseline
 (10 prompts, argmax, 48-token cap) produced
 **1/10 valid JSON, 1/10 correct function and 1/10 correct arguments**. The
 budget is `MAX_TOKENS = 48`, a 300 s total deadline and a 180 s per-prompt safety
@@ -120,8 +120,19 @@ missing functions file, invalid JSON, an empty catalog (list or
 `{"functions": []}`), a function without `parameters`, an unsupported parameter
 type, an empty prompt list, a blank prompt and an `--input` directory — returns
 exit code 1, prints a single `error: ...` line to stderr and never a traceback;
-the loaders run before any model construction. `pytest -q -m "not slow"` passes
-503 tests (3 deselected, 1 xfailed).
+the loaders run before any model construction.
+T8.2 closes the decoding/model failure matrix: `LLMClient` wraps lazy model
+construction as `ModelError("failed to load the model: ...")` and each backend
+call as `ModelError("<method> failed: ...")` (`encode`, `decode`, `logits`,
+`vocab_path`, `tokenizer_path`), re-raising an existing `ProjectError` unchanged
+so nothing is double-wrapped. The cache write in `build_decoder_index` already
+reports its path, and a parent-directory `OSError` is now typed too. Through
+`main(argv)`, an all-masked slot, `MAX_TOKENS`, an invalid final call and every
+injected backend failure exit 1 with an `error: ...` line and no traceback; a
+mid-batch failure leaves a pre-existing output file byte-for-byte unchanged.
+`pytest -q -m "not slow"` passes 515 tests (3 deselected, 1 xfailed), including
+108 in the focused error/decoder suites. All T8.2 cases use deterministic fakes
+and never load the real model.
 
 Baseline measured on the development machine (CPU, Python 3.13):
 
@@ -192,7 +203,7 @@ stderr and exit with status 1; successful runs are silent.
 | M5 — Decoder | mask, argmax, generation loop | done |
 | M6 — Pipeline | orchestration, validation, output | done |
 | M7 — CLI/Packaging | `python -m src`, Makefile targets | done |
-| M8 — Hardening | errors, performance, accuracy | in progress (T8.1 done) |
+| M8 — Hardening | errors, performance, accuracy | in progress (T8.1, T8.2 done) |
 | M9 — Tests | unit, integration, metrics | planned |
 | M10 — Docs/Defence | README, architecture, rehearsal | planned |
 | M11 — Submission | audit, cleanup, delivery | planned |

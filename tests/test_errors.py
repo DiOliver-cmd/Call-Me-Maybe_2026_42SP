@@ -1,4 +1,4 @@
-"""Unit tests for the error hierarchy and the CLI input-error matrix (T1.5, T8.1)."""
+"""Unit tests for the error hierarchy and the CLI error matrix (T1.5, T8.1, T8.2)."""
 
 from __future__ import annotations
 
@@ -22,6 +22,10 @@ from src.errors import (
     exit_code_for,
     format_error,
 )
+from src.llm_client import LLMClient
+from src.schemas import FunctionCall
+from src.vocab import TokenizerIndex
+from tests.fakes import ScriptedLLM
 
 PROJECT_ERROR_TYPES: list[type[ProjectError]] = [
     InputError,
@@ -289,3 +293,328 @@ def test_loader_accepts_explicit_empty_parameters(tmp_path: Path) -> None:
     catalog = load_functions(path)
 
     assert catalog.by_name("fn_echo").parameters == {}
+
+
+# --- T8.2: SDK/model failures are controlled ProjectErrors, never tracebacks. ---
+
+_EOS_ID = 1000
+_EOS_TEXT = "<|im_end|>"
+_CHARS = "abcdefghijklmnopqrstuvwxyz_\" 0123456789.-"
+
+_GREET_FUNCTION: dict[str, Any] = {
+    "name": "fn_greet",
+    "description": "Greet someone.",
+    "parameters": {"name": {"type": "string"}},
+    "returns": {"type": "string"},
+}
+
+
+def _tokens(text: str) -> list[int]:
+    """Return one token id per character, matching ``_char_index``."""
+    return [ord(char) for char in text]
+
+
+def _char_index() -> TokenizerIndex:
+    """Build a small char-token index that maps the EOS marker."""
+    texts = {ord(char): char for char in sorted(set(_CHARS))}
+    allowed_ids = tuple(sorted(texts))
+    texts[_EOS_ID] = _EOS_TEXT
+    buckets: dict[str, list[int]] = {}
+    for token_id in allowed_ids:
+        buckets.setdefault(texts[token_id][0], []).append(token_id)
+    return TokenizerIndex(
+        texts=texts,
+        allowed_ids=allowed_ids,
+        by_first_char={
+            char: tuple(token_ids) for char, token_ids in buckets.items()
+        },
+    )
+
+
+def _decoding_files(tmp_path: Path) -> tuple[Path, Path]:
+    """Write a valid two-function catalog and a single prompt."""
+    functions = _write_json(
+        tmp_path / "functions.json",
+        [{**_MINIMAL_FUNCTION, "name": "fn_ping"}, _GREET_FUNCTION],
+    )
+    prompts = _write_json(tmp_path / "prompts.json", [{"prompt": "Ping"}])
+    return functions, prompts
+
+
+def _install_scripted_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+    backend: Any,
+) -> None:
+    """Inject ``backend`` and a decoded index without touching assets."""
+    index = _char_index()
+    monkeypatch.setattr(
+        "src.pipeline.LLMClient",
+        lambda: LLMClient(backend=backend),
+    )
+    monkeypatch.setattr(
+        "src.pipeline.build_decoder_index",
+        lambda *args, **kwargs: index,
+    )
+
+
+class _FailingScripted(ScriptedLLM):
+    """Scripted backend whose configured public method raises ``RuntimeError``."""
+
+    def __init__(self, script: list[int], *, method: str) -> None:
+        super().__init__(script)
+        self.method = method
+
+    def encode(self, text: str) -> list[list[int]]:
+        if self.method == "encode":
+            raise RuntimeError("backend encode exploded")
+        return super().encode(text)
+
+    def decode(self, ids: list[int]) -> str:
+        if self.method == "decode":
+            raise RuntimeError("backend decode exploded")
+        return super().decode(ids)
+
+    def get_logits_from_input_ids(self, input_ids: list[int]) -> list[float]:
+        if self.method == "logits":
+            raise RuntimeError("backend logits exploded")
+        return super().get_logits_from_input_ids(input_ids)
+
+
+_METHOD_CALLS: dict[str, Any] = {
+    "encode": lambda client: client.encode("x"),
+    "logits": lambda client: client.logits([1]),
+    "decode": lambda client: client.decode([1]),
+}
+
+
+@pytest.mark.parametrize("method", ["encode", "logits", "decode"])
+def test_backend_failure_is_wrapped_as_model_error(method: str) -> None:
+    client = LLMClient(backend=_FailingScripted([], method=method))
+
+    with pytest.raises(ModelError) as excinfo:
+        _METHOD_CALLS[method](client)
+
+    assert type(excinfo.value) is ModelError
+    assert f"{method} failed" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+
+
+@pytest.mark.parametrize("method", ["encode", "logits", "decode"])
+def test_backend_failure_via_main_exits_one_without_traceback(
+    method: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    functions, prompts = _decoding_files(tmp_path)
+    output = tmp_path / "out.json"
+    script = _tokens("fn_ping") + [_EOS_ID]
+    backend = _FailingScripted(script, method=method)
+    _install_scripted_pipeline(monkeypatch, backend)
+
+    code = main(
+        [
+            "--functions_definition",
+            str(functions),
+            "--input",
+            str(prompts),
+            "--output",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert captured.err.startswith("error:")
+    assert f"{method} failed" in captured.err
+    assert "Traceback" not in captured.err
+    assert not output.exists()
+
+
+def test_lazy_model_load_failure_is_a_model_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_construct(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("no weights available")
+
+    monkeypatch.setattr("llm_sdk.Small_LLM_Model", fail_construct)
+
+    with pytest.raises(ModelError) as excinfo:
+        LLMClient().encode("x")
+
+    assert type(excinfo.value) is ModelError
+    assert str(excinfo.value) == (
+        "failed to load the model: no weights available"
+    )
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+
+
+def test_lazy_model_load_failure_via_main_exits_one_without_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    functions, prompts = _decoding_files(tmp_path)
+    output = tmp_path / "out.json"
+
+    def fail_construct(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("no weights available")
+
+    monkeypatch.setattr("llm_sdk.Small_LLM_Model", fail_construct)
+
+    code = main(
+        [
+            "--functions_definition",
+            str(functions),
+            "--input",
+            str(prompts),
+            "--output",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert captured.err.startswith("error:")
+    assert "failed to load the model" in captured.err
+    assert "Traceback" not in captured.err
+    assert not output.exists()
+
+
+def test_all_masked_slot_via_main_exits_one_without_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    functions, prompts = _decoding_files(tmp_path)
+    output = tmp_path / "out.json"
+    backend = ScriptedLLM(
+        _tokens("fn_ping") + [_EOS_ID],
+        all_masked_at=1,
+    )
+    _install_scripted_pipeline(monkeypatch, backend)
+
+    code = main(
+        [
+            "--functions_definition",
+            str(functions),
+            "--input",
+            str(prompts),
+            "--output",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert "no valid token" in captured.err
+    assert "Traceback" not in captured.err
+    assert not output.exists()
+
+
+def test_max_tokens_via_main_exits_one_without_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    functions = _write_json(tmp_path / "functions.json", [_GREET_FUNCTION])
+    prompts = _write_json(
+        tmp_path / "prompts.json",
+        [{"prompt": "Greet someone"}],
+    )
+    output = tmp_path / "out.json"
+    script = (
+        _tokens("fn_greet")
+        + [_EOS_ID]
+        + _tokens('"')
+        + _tokens("a" * 50)
+    )
+    backend = ScriptedLLM(script)
+    _install_scripted_pipeline(monkeypatch, backend)
+
+    code = main(
+        [
+            "--functions_definition",
+            str(functions),
+            "--input",
+            str(prompts),
+            "--output",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert "MAX_TOKENS" in captured.err
+    assert "Traceback" not in captured.err
+    assert not output.exists()
+
+
+def test_invalid_final_validation_via_main_exits_one_without_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    functions, prompts = _decoding_files(tmp_path)
+    output = tmp_path / "out.json"
+    _install_scripted_pipeline(monkeypatch, ScriptedLLM([]))
+
+    def invalid_decode_call(*args: object, **kwargs: object) -> FunctionCall:
+        return FunctionCall(prompt="Ping", name="fn_undeclared", parameters={})
+
+    monkeypatch.setattr("src.pipeline.decode_call", invalid_decode_call)
+
+    code = main(
+        [
+            "--functions_definition",
+            str(functions),
+            "--input",
+            str(prompts),
+            "--output",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert "is not declared in the catalog" in captured.err
+    assert "Traceback" not in captured.err
+    assert not output.exists()
+
+
+def test_mid_batch_failure_leaves_existing_output_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output = tmp_path / "out.json"
+    sentinel = '{"sentinel": true}\n'
+    output.write_text(sentinel, encoding="utf-8")
+
+    def fail_run(*args: object, **kwargs: object) -> list[FunctionCall]:
+        raise DecodingError("prompt 1 failed mid-batch")
+
+    monkeypatch.setattr("src.__main__.run", fail_run)
+
+    code = main(
+        [
+            "--functions_definition",
+            str(tmp_path / "functions.json"),
+            "--input",
+            str(tmp_path / "prompts.json"),
+            "--output",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert "prompt 1 failed mid-batch" in captured.err
+    assert "Traceback" not in captured.err
+    assert output.read_text(encoding="utf-8") == sentinel
