@@ -1,0 +1,257 @@
+"""Profile one real string call and one real numeric call (T8.3).
+
+Run manually with::
+
+    uv run python -m experiments.profile_decode
+    uv run python -m experiments.profile_decode --output /tmp/profile.md
+
+The script builds the real decoded-token index (reusing
+``.cache/token_text.json``), then times :func:`build_decoder_index` and two
+representative :func:`src.decoder.decode_call` runs. The public model methods
+(``encode``, ``logits``, ``decode``) and :func:`allowed_token_ids` are wrapped
+with ``time.perf_counter`` counters, so the report separates mask iteration from
+the SDK forward pass instead of guessing.
+
+No model weights are changed and no private SDK attribute is touched. The
+default output is ``experiments/profile.md``; pass ``--output`` to keep a
+before/after run side by side.
+"""
+
+from __future__ import annotations
+
+import argparse
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from src.data_loader import load_functions
+from src.decoder import NUMBER_EOS_BONUS, allowed_token_ids, decode_call
+from src.errors import ProjectError
+from src.llm_client import LLMClient
+from src.pipeline import build_decoder_index
+
+FUNCTIONS_PATH = Path("data/input/functions_definition.json")
+CASES: tuple[tuple[str, str], ...] = (
+    ("string", "Reverse the string 'hello'"),
+    ("number", "What is the sum of 2 and 3?"),
+)
+
+
+@dataclass
+class Counter:
+    """Accumulated wall time and calls for one instrumented function."""
+
+    calls: int = 0
+    seconds: float = 0.0
+    durations: list[float] = field(default_factory=list)
+
+    def add(self, seconds: float) -> None:
+        """Record one call duration."""
+        self.calls += 1
+        self.seconds += seconds
+        self.durations.append(seconds)
+
+    @property
+    def average_ms(self) -> float:
+        """Mean call duration in milliseconds (0 when never called)."""
+        if not self.calls:
+            return 0.0
+        return self.seconds * 1000.0 / self.calls
+
+    @property
+    def max_ms(self) -> float:
+        """Longest call duration in milliseconds (0 when never called)."""
+        return max(self.durations, default=0.0) * 1000.0
+
+
+def _timed(
+    label: str,
+    fn: Callable[..., Any],
+    counters: dict[str, Counter],
+) -> Callable[..., Any]:
+    """Return a wrapper that records ``fn`` into ``counters[label]``."""
+
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        start = time.perf_counter()
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            counters[label].add(time.perf_counter() - start)
+
+    return wrapper
+
+
+def _instrument(
+    model: LLMClient,
+    counters: dict[str, Counter],
+) -> None:
+    """Wrap the public model methods and the decoder mask in place."""
+    model.encode = _timed("encode", model.encode, counters)  # type: ignore[method-assign]
+    model.logits = _timed("logits", model.logits, counters)  # type: ignore[method-assign]
+    model.decode = _timed("decode", model.decode, counters)  # type: ignore[method-assign]
+    import src.decoder as decoder_module
+
+    decoder_module.allowed_token_ids = _timed(
+        "allowed_token_ids",
+        decoder_module.allowed_token_ids,
+        counters,
+    )
+
+
+def _restore(model: LLMClient, original: dict[str, Any]) -> None:
+    """Undo instance attribute overrides and the decoder patch."""
+    import src.decoder as decoder_module
+
+    decoder_module.allowed_token_ids = original["allowed_token_ids"]
+    for name in ("encode", "logits", "decode"):
+        model.__dict__.pop(name, None)
+
+
+def _run_case(
+    model: LLMClient,
+    catalog: Any,
+    label: str,
+    prompt: str,
+) -> tuple[float, int, dict[str, Counter]]:
+    """Decode one prompt with instrumentation and return its measurements."""
+    counters = {name: Counter() for name in (
+        "encode",
+        "logits",
+        "decode",
+        "allowed_token_ids",
+    )}
+    original = {"allowed_token_ids": allowed_token_ids}
+    _instrument(model, counters)
+    try:
+        start = time.perf_counter()
+        call = decode_call(
+            model,
+            catalog,
+            prompt,
+            index=_INDEX,
+            number_eos_bonus=NUMBER_EOS_BONUS,
+        )
+        total = time.perf_counter() - start
+    finally:
+        _restore(model, original)
+    print(f"[{label}] {call.name} {call.parameters}")
+    return total, counters["logits"].calls, counters
+
+
+def _row(label: str, counter: Counter) -> str:
+    """Format one markdown table row."""
+    return (
+        f"| `{label}` | {counter.calls} | {counter.seconds:.3f} | "
+        f"{counter.average_ms:.1f} | {counter.max_ms:.1f} |"
+    )
+
+
+def _report(
+    index_seconds: float,
+    results: list[tuple[str, str, float, int, dict[str, Counter]]],
+) -> str:
+    """Build the markdown profiling report."""
+    lines = [
+        "# Decode profiling (T8.3)",
+        "",
+        "Generated by `uv run python -m experiments.profile_decode`.",
+        "Times are `time.perf_counter` wall-clock on the development CPU.",
+        "",
+        "## Index build",
+        "",
+        f"- `build_decoder_index` (cached `.cache/token_text.json`): "
+        f"**{index_seconds:.3f} s**",
+        "",
+    ]
+    for label, prompt, total, steps, counters in results:
+        lines += [
+            f"## Case `{label}`",
+            "",
+            f"Prompt: `{prompt}`",
+            "",
+            f"- total `decode_call`: **{total:.3f} s** over **{steps}** "
+            f"model steps ({total * 1000.0 / max(steps, 1):.1f} ms/step)",
+            "",
+            "| function | calls | total s | avg ms | max ms |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+        lines += [_row(name, counter) for name, counter in counters.items()]
+        mask = counters["allowed_token_ids"]
+        logits = counters["logits"]
+        lines += [
+            "",
+            f"- mask share of total: "
+            f"**{100.0 * mask.seconds / total:.1f}%**",
+            f"- logits share of total: "
+            f"**{100.0 * logits.seconds / total:.1f}%**",
+            f"- `encode` calls: **{counters['encode'].calls}** "
+            f"(prompt + fixed segments, not per step)",
+            f"- `decode` calls: **{counters['decode'].calls}**",
+            "",
+        ]
+    if results:
+        mask_total = sum(r[4]["allowed_token_ids"].seconds for r in results)
+        logits_total = sum(r[4]["logits"].seconds for r in results)
+        total = sum(r[2] for r in results)
+        lines += [
+            "## Bottleneck",
+            "",
+            f"- mask iteration: **{mask_total:.3f} s** "
+            f"({100.0 * mask_total / total:.1f}% of profiled time)",
+            f"- model forward (`logits`): **{logits_total:.3f} s** "
+            f"({100.0 * logits_total / total:.1f}%)",
+            "",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+_INDEX: Any = None
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the profiling experiment and write the markdown report."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("experiments/profile.md"),
+        help="markdown report path",
+    )
+    args = parser.parse_args(argv)
+
+    global _INDEX
+    try:
+        load_start = time.perf_counter()
+        model = LLMClient()
+        model.encode("warmup")  # force lazy model construction
+        load_seconds = time.perf_counter() - load_start
+        print(f"model load: {load_seconds:.3f} s")
+
+        index_start = time.perf_counter()
+        _INDEX = build_decoder_index(model)
+        index_seconds = time.perf_counter() - index_start
+        print(f"index build: {index_seconds:.3f} s")
+
+        catalog = load_functions(FUNCTIONS_PATH)
+        results: list[
+            tuple[str, str, float, int, dict[str, Counter]]
+        ] = []
+        for label, prompt in CASES:
+            total, steps, counters = _run_case(model, catalog, label, prompt)
+            results.append((label, prompt, total, steps, counters))
+    except ProjectError as exc:
+        print(f"error: {exc}")
+        return 1
+
+    report = _report(index_seconds, results)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(report, encoding="utf-8")
+    print(report)
+    print(f"report written: {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

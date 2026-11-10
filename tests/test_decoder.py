@@ -439,6 +439,136 @@ def test_result_is_sorted_unique_deterministic_and_does_not_mutate_dfa() -> None
     assert _snapshot(dfa) == before
 
 
+# T8.3: transparent per-index memoization of the slot mask.
+
+
+def _cache_texts() -> dict[int, str]:
+    """Texts covering names, strings, numbers and booleans."""
+    return {
+        0: "f",
+        1: "fn_",
+        2: "fn_add",
+        3: "fn_greet",
+        4: "zzz",
+        5: '"',
+        6: "a",
+        7: "b",
+        8: "1",
+        9: "0",
+        10: "5",
+        11: ".",
+        12: "e",
+        13: "t",
+        14: "r",
+        15: "u",
+    }
+
+
+def test_allowed_token_ids_memoizes_and_returns_the_cached_tuple() -> None:
+    index = _make_index(_cache_texts())
+    dfa = _walk(_PARAM_STRING_PREFIX)
+
+    first = allowed_token_ids(dfa, index)
+
+    assert index.allowed_cache == {(DFAState.PARAM_VALUE_STRING, ""): first}
+    second = allowed_token_ids(dfa, index)
+    assert second is first
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        _NAME_PREFIX + "fn_",
+        _PARAM_STRING_PREFIX,
+        _PARAM_START_PREFIX + "1",
+        _PARAM_BOOLEAN_PREFIX + "t",
+    ],
+    ids=["name", "string", "number", "boolean"],
+)
+def test_cached_mask_matches_a_fresh_recompute(prefix: str) -> None:
+    index = _make_index(_cache_texts())
+    dfa = _walk(prefix)
+
+    cached = allowed_token_ids(dfa, index)
+    assert index.allowed_cache
+
+    index.allowed_cache.clear()
+    fresh = allowed_token_ids(dfa, index)
+
+    assert cached == fresh
+    assert index.allowed_cache
+
+
+def test_different_name_prefixes_get_different_cache_entries() -> None:
+    index = _make_index(_cache_texts())
+    first = _walk(_NAME_PREFIX)
+    second = _walk(_NAME_PREFIX + "fn_g")
+
+    allowed_token_ids(first, index)
+    allowed_token_ids(second, index)
+
+    name_keys = {
+        key for key in index.allowed_cache if key[0] is DFAState.NAME_VALUE
+    }
+    assert name_keys == {
+        (DFAState.NAME_VALUE, ""),
+        (DFAState.NAME_VALUE, "fn_g"),
+    }
+
+
+def test_buffer_independent_value_states_share_one_entry() -> None:
+    index = _make_index(_cache_texts())
+    empty = _walk(_PARAM_STRING_PREFIX)
+    filled = _walk(_PARAM_STRING_PREFIX + "ab")
+    start = _walk(_PARAM_START_PREFIX)
+
+    first = allowed_token_ids(empty, index)
+    second = allowed_token_ids(filled, index)
+    allowed_token_ids(start, index)
+
+    # The same string-content state reuses one mask regardless of content.
+    assert first == second
+    assert set(index.allowed_cache) == {
+        (DFAState.PARAM_VALUE_STRING, ""),
+        (DFAState.PARAM_VALUE_START, ""),
+    }
+
+
+def test_number_and_boolean_cache_keys_follow_their_buffers() -> None:
+    index = _make_index(_cache_texts())
+    one = _walk(_PARAM_START_PREFIX + "1")
+    zero = _walk(_PARAM_START_PREFIX + "0")
+    t = _walk(_PARAM_BOOLEAN_PREFIX + "t")
+    tr = _walk(_PARAM_BOOLEAN_PREFIX + "tr")
+
+    one_mask = allowed_token_ids(one, index)
+    zero_mask = allowed_token_ids(zero, index)
+    t_mask = allowed_token_ids(t, index)
+    tr_mask = allowed_token_ids(tr, index)
+
+    # Masks differ by buffer, so sharing one entry per state would be a bug.
+    assert one_mask != zero_mask
+    assert t_mask != tr_mask
+    assert (DFAState.PARAM_VALUE_NUMBER, "1") in index.allowed_cache
+    assert (DFAState.PARAM_VALUE_NUMBER, "0") in index.allowed_cache
+    assert (DFAState.PARAM_VALUE_BOOLEAN, "t") in index.allowed_cache
+    assert (DFAState.PARAM_VALUE_BOOLEAN, "tr") in index.allowed_cache
+
+
+def test_two_indexes_do_not_share_cache_entries() -> None:
+    first_index = _make_index(_cache_texts())
+    second_index = _make_index(_cache_texts())
+    dfa = _walk(_PARAM_STRING_PREFIX)
+
+    first = allowed_token_ids(dfa, first_index)
+
+    assert second_index.allowed_cache == {}
+    second = allowed_token_ids(dfa, second_index)
+    assert second == first
+    assert first_index.allowed_cache == second_index.allowed_cache
+    assert first_index.allowed_cache is not second_index.allowed_cache
+
+
 def test_build_token_index_excludes_special_and_empty_ids() -> None:
     vocab = TokenizerVocab(
         token_text={
