@@ -6,7 +6,7 @@ Function-calling tool with **constrained decoding** on top of `Qwen/Qwen3-0.6B`:
 the model proposes the next token, a DFA masks every token that would break the
 JSON grammar, and the pipeline writes one function call per user prompt.
 
-Status: M0–M4 complete; M5 (decoder) in progress — `src/vocab.py`
+Status: M0–M5 complete; M6 (pipeline) in progress — `src/vocab.py`
 parses `tokenizer.json` (`model.vocab` + `added_tokens`), builds `token_text` via
 the SDK's public `decode`, and indexes tokens by first character so a step
 narrows the 151,643 allowed tokens before the prefix/DFA check; structural
@@ -23,7 +23,7 @@ an injectable fake. `src/prompt.py` builds a deterministic plain-text prompt
 template; measured sizes are 383–402 tokens with the full 6-function catalog and
 148–167 tokens with a single function. The input catalog, the output call
 models, the JSON loaders and the project-wide error policy are defined and
-validated with Pydantic (461 tests: 460 passing, one documented xfail, plus a
+validated with Pydantic (465 tests: 464 passing, one documented xfail, plus a
 slow round-trip suite against the real model). The unconstrained baseline
 (10 prompts, argmax, 48-token cap) produced
 **1/10 valid JSON, 1/10 correct function and 1/10 correct arguments**. The
@@ -52,8 +52,12 @@ logits call including EOS against `MAX_TOKENS`, and returns a validated
 `FunctionCall` only after `ACCEPT`. T5.4 hardens the deterministic fake matrix
 with a reusable `ScriptedLLM`, high-logit distractors, boolean/empty/multi-string
 slots, escaped Unicode, explicit EOS overrides and exact `MAX_TOKENS` boundaries.
-The T6.1 pipeline orchestration is next. The decoded-cache benchmark (5-run
-median after one warm-up, measured
+T6.1 adds the pipeline orchestrator: `run` loads the catalog and prompts in
+order, reuses one tokenizer index, preserves each original prompt, and aborts
+with a prompt-positioned `DecodingError` instead of returning partial results.
+`build_decoder_index` caches decoded token text under `.cache/token_text.json`
+and rebuilds after a stale/partial cache. The T6.2 per-call schema validation is
+next. The decoded-cache benchmark (5-run median after one warm-up, measured
 on the development machine; wall-clock varies about ±20%) measured
 NAME_VALUE 2 candidates/101 ms, PARAM_VALUE_START 302/512 ms,
 PARAM_VALUE_STRING 147k/2971 ms, PARAM_VALUE_NUMBER 13/654 ms,
@@ -114,8 +118,8 @@ make clean     # remove caches and generated output
 | M2 — Vocabulary | tokenizer, `token_text`, indexes | done |
 | M3 — LLM baseline | client, prompt, unconstrained measurement | done |
 | M4 — Grammar/DFA | states, slots, transitions | done |
-| M5 — Decoder | mask, argmax, generation loop | in progress |
-| M6 — Pipeline | orchestration, validation, output | planned |
+| M5 — Decoder | mask, argmax, generation loop | done |
+| M6 — Pipeline | orchestration, validation, output | in progress |
 | M7 — CLI/Packaging | `python -m src`, Makefile targets | planned |
 | M8 — Hardening | errors, performance, accuracy | planned |
 | M9 — Tests | unit, integration, metrics | planned |

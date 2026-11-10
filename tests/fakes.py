@@ -56,6 +56,10 @@ class FakeLLM:
         self.vocab_path_calls += 1
         return self.vocab_path_text
 
+    def get_path_to_tokenizer_file(self) -> str:
+        """Return an unused tokenizer path; pipeline tests inject an index."""
+        return "unused"
+
 
 class ScriptedLLM:
     """Deterministic backend that plays a fixed script of next-token ids.
@@ -112,4 +116,8 @@ class ScriptedLLM:
 
     def get_path_to_vocab_file(self) -> str:
         """Return an unused path; decoding tests never load the real vocab."""
+        return "unused"
+
+    def get_path_to_tokenizer_file(self) -> str:
+        """Return an unused tokenizer path; decoding tests never load it."""
         return "unused"
