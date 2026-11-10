@@ -23,16 +23,18 @@ Lookup strategy: :class:`TokenizerIndex` groups allowed tokens by their first
 decoded character, narrowing ~151k ids to a few thousand before the full
 ``str.startswith`` check. Byte-level fragments stay in the index (keyed on
 ``U+FFFD`` when the per-id decode is lossy) because the decoder needs them to
-assemble UTF-8. The ``(state_id, token_id) -> next_state_id`` transition cache is
-deferred: it needs DFA state ids, which do not exist until T4; revisit it in
-T8.3 profiling.
+assemble UTF-8. T8.3 adds ``allowed_cache`` to the index: the decoder memoizes
+its slot mask per index, keyed by the DFA state plus the only buffer that can
+change the result (name prefix, number buffer, literal buffer or the remaining
+Unicode-escape digits). The cache is transparent and persists across prompts
+because the pipeline reuses one index.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -93,11 +95,21 @@ class TokenizerIndex:
             is empty are skipped; lossy byte-level fragments are keyed on
             ``U+FFFD`` because that is the first character of their per-id
             ``decode``.
+        allowed_cache: Memoized ``allowed_token_ids`` results for this index.
+            The key is ``(dfa.state, discriminator)`` where the discriminator
+            is empty for buffer-independent states, the name prefix in
+            ``NAME_VALUE``, the number buffer in ``PARAM_VALUE_NUMBER``, the
+            literal buffer in ``PARAM_VALUE_BOOLEAN`` and the remaining Unicode
+            escape digits in ``PARAM_VALUE_STRING``. It is mutable, excluded
+            from equality and repr, and shared across prompts by the pipeline.
     """
 
     texts: dict[int, str]
     allowed_ids: tuple[int, ...]
     by_first_char: dict[str, tuple[int, ...]]
+    allowed_cache: dict[
+        tuple[object, str], tuple[int, ...]
+    ] = field(default_factory=dict, compare=False, repr=False)
 
     def tokens_starting_with(self, prefix: str) -> tuple[int, ...]:
         """Return sorted allowed ids whose text starts with ``prefix``.

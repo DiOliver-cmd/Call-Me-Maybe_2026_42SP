@@ -105,8 +105,9 @@ NAME_VALUE 2 candidates/101 ms, PARAM_VALUE_START 302/512 ms,
 PARAM_VALUE_STRING 147k/2971 ms, PARAM_VALUE_NUMBER 13/654 ms,
 PARAM_VALUE_BOOLEAN 2/90 ms, PARAM_VALUE_DONE 0/0 ms and ACCEPT 0/0 ms per step.
 The string-value state still validates ~150k token texts across 17,773/17,805
-buckets, so its fast path and caching work remain deferred to T8.3. Full
-documentation is delivered in the `docs` milestone.
+buckets on the first scan; T8.3 now memoizes that result per index, so every
+later string step is a dictionary hit. Full documentation is delivered in the
+`docs` milestone.
 T7.4 validates a clean clone (HTTPS clone into `/tmp`): `uv sync` (5.9 s) is the
 only install step, `python -m src --help` works, a one-prompt
 `{"prompt": "Greet shrek"}` run builds the token cache and returns
@@ -133,6 +134,26 @@ mid-batch failure leaves a pre-existing output file byte-for-byte unchanged.
 `pytest -q -m "not slow"` passes 515 tests (3 deselected, 1 xfailed), including
 108 in the focused error/decoder suites. All T8.2 cases use deterministic fakes
 and never load the real model.
+T8.3 profiles the real decoder and memoizes the slot mask. `allowed_token_ids`
+now stores results in a mutable, non-compared `allowed_cache` on the reused
+`TokenizerIndex`. The key is the DFA state plus the only buffer that can change
+the result: the name prefix (`NAME_VALUE`), number buffer, literal buffer, or
+remaining Unicode-escape digits (`PARAM_VALUE_STRING`); other states share one
+entry. This keeps the cache transparent: measurement showed the number,
+boolean and `\u` masks are *not* buffer-independent, so keying only by the enum
+would return a stale mask. Real-vocabulary checks confirm every cached tuple
+matches a fresh recomputation. `experiments/profile_decode.py` measures the
+`Reverse the string 'hello'` and `What is the sum of 2 and 3?` calls with
+`perf_counter` wrappers around `allowed_token_ids`, `encode`, `logits` and
+`decode`; the before/after report is `experiments/profile.md`. Before: mask
+8.128 s / logits 53.581 s (13.2% vs 86.7%). After: mask 3.929 s / logits
+51.998 s (7.0% vs 92.8%, mask -51.7%). `encode` is called once for the prompt
+plus once per fixed segment, never per step. The default 17-prompt
+`uv run python -m src` run now takes **11m42s** (exit 0, 17 calls) versus
+16m54s-18m05s before; the remaining bottleneck is the ~3.0 s CPU forward pass
+(~93% of profiled time), which the public SDK exposes without a KV cache.
+`pytest -q -m "not slow"` passes 524 tests (3 deselected, 1 xfailed); `flake8`
+and `mypy` are clean.
 
 Baseline measured on the development machine (CPU, Python 3.13):
 
@@ -203,7 +224,7 @@ stderr and exit with status 1; successful runs are silent.
 | M5 — Decoder | mask, argmax, generation loop | done |
 | M6 — Pipeline | orchestration, validation, output | done |
 | M7 — CLI/Packaging | `python -m src`, Makefile targets | done |
-| M8 — Hardening | errors, performance, accuracy | in progress (T8.1, T8.2 done) |
+| M8 — Hardening | errors, performance, accuracy | in progress (T8.1, T8.2, T8.3 done) |
 | M9 — Tests | unit, integration, metrics | planned |
 | M10 — Docs/Defence | README, architecture, rehearsal | planned |
 | M11 — Submission | audit, cleanup, delivery | planned |

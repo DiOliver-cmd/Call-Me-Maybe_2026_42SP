@@ -7,10 +7,12 @@ injected state. :func:`masked_logits` applies ``-inf`` outside the allowed set,
 :func:`select_next_token` performs the guarded argmax, and :func:`decode_call`
 alternates fixed injection with slot generation until ``ACCEPT``.
 
-No transition cache is used here. A cache key would need the whole DFA state,
-including ``name_buffer``, ``number_buffer``, ``literal_buffer`` and
-``unicode_remaining``, not just the enum member. That design, together with
-profiling-driven cache sizing, is deferred to T8.3.
+T8.3 memoizes :func:`allowed_token_ids` per :class:`TokenizerIndex`. The cache
+key is the DFA state plus the only buffer that can change the mask: the name
+prefix in ``NAME_VALUE``, the number buffer in ``PARAM_VALUE_NUMBER``, the
+literal buffer in ``PARAM_VALUE_BOOLEAN`` and the remaining Unicode escape
+digits in ``PARAM_VALUE_STRING``. All other states are buffer-independent, so
+the expensive string mask is computed once per index and reused across prompts.
 """
 
 from __future__ import annotations
@@ -111,6 +113,25 @@ def _path_stays_in_targets(
     return True
 
 
+def _allowed_cache_key(dfa: DFA) -> tuple[object, str]:
+    """Return the transparency-preserving cache key for the current mask.
+
+    A mask depends on the DFA state and, in a few states, on the value already
+    consumed. Every other state ignores the remaining buffers, so it uses an
+    empty discriminator and shares one cache entry per state.
+    """
+    state = dfa.state
+    if state is DFAState.NAME_VALUE:
+        return state, dfa.name_buffer
+    if state is DFAState.PARAM_VALUE_NUMBER:
+        return state, dfa.number_buffer
+    if state is DFAState.PARAM_VALUE_BOOLEAN:
+        return state, dfa.literal_buffer
+    if state is DFAState.PARAM_VALUE_STRING and dfa.unicode_remaining:
+        return state, f"u{dfa.unicode_remaining}"
+    return state, ""
+
+
 def allowed_token_ids(dfa: DFA, index: TokenizerIndex) -> tuple[int, ...]:
     """Return sorted ids that keep the machine inside the current slot.
 
@@ -124,6 +145,11 @@ def allowed_token_ids(dfa: DFA, index: TokenizerIndex) -> tuple[int, ...]:
     containing ``"{}:,`` must additionally stay inside ``targets`` after every
     character, so it cannot consume fixed text and end in an allowed state.
 
+    Results are memoized in ``index.allowed_cache`` under the state plus the
+    buffer that can change the outcome. The cache is transparent: a hit returns
+    exactly the tuple the uncached scan would produce, and the mask is reused
+    across prompts because :func:`src.pipeline.run` reuses one index.
+
     The input machine is never mutated. Empty and special ids are absent from
     ``by_first_char``; missing/empty texts are skipped defensively and are never
     re-opened.
@@ -131,6 +157,11 @@ def allowed_token_ids(dfa: DFA, index: TokenizerIndex) -> tuple[int, ...]:
     targets = _SLOT_TARGETS.get(dfa.state)
     if targets is None:
         return ()
+
+    key = _allowed_cache_key(dfa)
+    cached = index.allowed_cache.get(key)
+    if cached is not None:
+        return cached
 
     allowed: set[int] = set()
 
@@ -158,7 +189,9 @@ def allowed_token_ids(dfa: DFA, index: TokenizerIndex) -> tuple[int, ...]:
             if advanced is not None and advanced.state in targets:
                 allowed.add(token_id)
 
-    return tuple(sorted(allowed))
+    result = tuple(sorted(allowed))
+    index.allowed_cache[key] = result
+    return result
 
 
 def masked_logits(
