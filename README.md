@@ -76,6 +76,22 @@ rambles in the number slot (`2.0000...`); that is recorded for T8.4/T8.5.
 T7.1 adds `src/__main__.py`: `python -m src` exposes the three subject flags,
 forwards them to `run`/`write_output`, prints only `error: ...` for expected
 project failures, and returns a nonzero exit code without a traceback.
+T7.2 adds a calibrated numeric EOS bonus. Once a number slot already holds a
+complete value, the decoder adds `NUMBER_EOS_BONUS = 25.0` to the EOS logit
+before the argmax; the DFA still validates EOS, and no grammar or keyword rule
+changed. `decode_call` keeps its raw `number_eos_bonus=0.0` default, so unit and
+experimental calls measure the untouched model; the production `run` opts in by
+passing the constant. Calibration on the real greedy model: the sum prompt has
+EOS at -2.09 and the dot token at 19.54, so raw EOS loses by 21.63; in the
+`265` case the next digit `6` reaches 28.42, so EOS+25 = 22.91 must beat the dot
+but not the digit. Probes confirm the trade-off: sum -> `a=2, b=3`;
+`265+345` -> `a=265, b=345`; `sqrt 2` -> `a=2`. This unblocks the numeric
+defaults: the real `experiments/e2e.py --real` sum run returns
+`fn_add_numbers(a=2, b=3)` in 31.99 s, `make run` completes all 17 fixture
+prompts in 17m00s, and `python -m src` completes them in 16m54s. The numeric
+fixtures now decode correctly (`2/3`, `265/345`, `-12/7`, `16`, `144`); remaining
+wrong values are string-slot contamination (`"world}}"`, regex tails), tracked
+outside T7.2. Real command evidence is recorded on the issue.
 The decoded-cache benchmark (5-run median after one warm-up, measured
 on the development machine; wall-clock varies about ±20%) measured
 NAME_VALUE 2 candidates/101 ms, PARAM_VALUE_START 302/512 ms,

@@ -36,12 +36,27 @@ from src.schemas import FunctionCall, FunctionCatalog
 from src.vocab import TokenizerIndex
 
 __all__ = [
+    "NUMBER_EOS_BONUS",
     "allowed_token_ids",
     "decode_call",
     "masked_logits",
     "select_next_token",
     "slot_can_stop",
 ]
+
+# Logit bonus added to EOS once a number is already complete. Greedy decoding
+# otherwise keeps extending a valid number (for example "2" -> "2.0000...")
+# and never reaches EOS. The bonus only biases the choice; every token,
+# including EOS, is still validated by the DFA.
+#
+# Production calibration against the real Qwen/Qwen3-0.6B greedy model:
+# the sum prompt has EOS at -2.09 and the dot token at 19.54, so a raw EOS
+# loses by 21.63; in the "265" case the next digit "6" reaches 28.42, so EOS
+# must stay below it once EOS is boosted. A +25 bonus puts EOS at 22.91, which
+# beats "." (19.54) but not "6" (28.42). Probes: sum -> a=2, b=3; 265+345 ->
+# a=265, b=345; sqrt 2 -> a=2. Callers keep the raw default of 0.0; the
+# production pipeline opts in by passing this constant explicitly.
+NUMBER_EOS_BONUS = 25.0
 
 # States reachable while the model is still allowed to generate inside one slot.
 # The closing name quote, comma/brace delimiters and all key/structural text are
@@ -263,6 +278,7 @@ def decode_call(
     index: TokenizerIndex,
     eos_token_id: int | None = None,
     max_tokens: int = MAX_TOKENS,
+    number_eos_bonus: float = 0.0,
 ) -> FunctionCall:
     """Decode one complete function call without asking for fixed text.
 
@@ -271,6 +287,11 @@ def decode_call(
     steps. A step is counted for every ``model.logits`` call, including a call
     that selects EOS; when the next step would exceed ``max_tokens`` the decoder
     raises :class:`DecodingError` before calling the model again.
+
+    ``number_eos_bonus`` is added to the EOS logit once a number slot already
+    holds a complete value. It defaults to ``0.0`` so raw decoding keeps the
+    model's scores unchanged; the production pipeline opts in by passing
+    :data:`NUMBER_EOS_BONUS`.
 
     The returned :class:`FunctionCall` is parsed from the complete generated
     template. Any DFA, budget or schema failure raises an exception instead of
@@ -304,6 +325,13 @@ def decode_call(
             )
         logits = model.logits(input_ids)
         steps += 1
+        if (
+            number_eos_bonus
+            and dfa.state is DFAState.PARAM_VALUE_NUMBER
+            and slot_can_stop(dfa)
+        ):
+            logits = logits.copy()
+            logits[eos] = logits[eos] + number_eos_bonus
         return select_next_token(logits, candidates)
 
     for segment in build_prefix_segments(prompt, model.encode):

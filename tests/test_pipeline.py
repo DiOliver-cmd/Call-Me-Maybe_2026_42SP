@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from src.decoder import NUMBER_EOS_BONUS
 from src.errors import DecodingError, SchemaError
 from src.llm_client import LLMClient
 from src.pipeline import build_decoder_index, run, write_output
@@ -218,6 +219,39 @@ def test_run_wraps_validation_failure_with_prompt_context(
     assert prompts[0] in message
     assert "fn_missing" in message
     assert isinstance(excinfo.value.__cause__, SchemaError)
+
+
+def test_run_forwards_the_number_eos_bonus(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    functions_path, prompts_path, prompts = _write_inputs(tmp_path)
+    captured: list[dict[str, object]] = []
+
+    def fake_decode(*args: object, **kwargs: object) -> FunctionCall:
+        captured.append(dict(kwargs))
+        return FunctionCall(
+            prompt=str(args[2]),
+            name="fn_ping",
+            parameters={},
+        )
+
+    monkeypatch.setattr("src.pipeline.decode_call", fake_decode)
+
+    calls = run(
+        functions_path,
+        prompts_path,
+        model=LLMClient(backend=ScriptedLLM([])),
+        index=_pipeline_index(),
+    )
+
+    assert [call.prompt for call in calls] == prompts
+    assert [call.name for call in calls] == ["fn_ping"] * len(prompts)
+    assert len(captured) == len(prompts)
+    assert all(
+        kwargs["number_eos_bonus"] == NUMBER_EOS_BONUS for kwargs in captured
+    )
+    assert NUMBER_EOS_BONUS == 25.0
 
 
 def test_build_decoder_index_uses_and_reuses_cache(tmp_path: Path) -> None:

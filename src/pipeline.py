@@ -18,7 +18,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from src.data_loader import PathLike, load_functions, load_prompts
-from src.decoder import decode_call
+from src.decoder import NUMBER_EOS_BONUS, decode_call
 from src.errors import DecodingError, ProjectError, SchemaError
 from src.llm_client import LLMClient
 from src.schemas import FunctionCall, FunctionCallBatch
@@ -108,6 +108,7 @@ def run(
                 prompt,
                 index=decoder_index,
                 eos_token_id=eos_token_id,
+                number_eos_bonus=NUMBER_EOS_BONUS,
             )
             calls.append(catalog.validate_call(call))
         except ProjectError as exc:
