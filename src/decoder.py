@@ -18,7 +18,7 @@ the expensive string mask is computed once per index and reused across prompts.
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -312,6 +312,7 @@ def decode_call(
     eos_token_id: int | None = None,
     max_tokens: int = MAX_TOKENS,
     number_eos_bonus: float = 0.0,
+    prompt_builder: Callable[[FunctionCatalog, str], str] = build_prompt,
 ) -> FunctionCall:
     """Decode one complete function call without asking for fixed text.
 
@@ -326,6 +327,9 @@ def decode_call(
     model's scores unchanged; the production pipeline opts in by passing
     :data:`NUMBER_EOS_BONUS`.
 
+    ``prompt_builder`` defaults to :func:`src.prompt.build_prompt`; it exists so
+    the T8.4 benchmark can compare prompt formats without a second decoder.
+
     The returned :class:`FunctionCall` is parsed from the complete generated
     template. Any DFA, budget or schema failure raises an exception instead of
     returning a partial call.
@@ -333,7 +337,7 @@ def decode_call(
     eos = _resolve_eos_token_id(index, eos_token_id)
     dfa = DFA.start([function.name for function in functions])
 
-    prompt_ids = model.encode(build_prompt(functions, prompt))
+    prompt_ids = model.encode(prompt_builder(functions, prompt))
     input_ids: list[int] = list(prompt_ids)
     output_ids: list[int] = []
     steps = 0

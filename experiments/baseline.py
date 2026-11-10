@@ -33,7 +33,7 @@ import numpy as np
 
 from src.data_loader import load_functions, load_prompts
 from src.llm_client import LLMClient
-from src.prompt import build_prompt
+from src.prompt import build_verbose_prompt
 
 FUNCTIONS_PATH = Path("data/input/functions_definition.json")
 PROMPTS_PATH = Path("data/input/function_calling_tests.json")
@@ -231,7 +231,7 @@ def _run_case(
     max_new_tokens: int,
 ) -> dict[str, Any]:
     """Generate and score one labeled case."""
-    prompt = build_prompt(catalog, case.prompt)
+    prompt = build_verbose_prompt(catalog, case.prompt)
     generation = _generate(client, prompt, max_new_tokens)
     parsed = _extract_object(generation.generated_text)
 

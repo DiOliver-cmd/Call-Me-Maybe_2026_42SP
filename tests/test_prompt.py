@@ -19,6 +19,7 @@ from src.prompt import (
     build_prompt,
     build_segments,
     build_template,
+    build_verbose_prompt,
     count_prompt_tokens,
 )
 from src.schemas import (
@@ -180,7 +181,7 @@ def test_prompt_works_with_function_subsets(
 
 
 def test_embedded_json_block_round_trips(catalog: FunctionCatalog) -> None:
-    prompt = build_prompt(catalog, "Greet shrek")
+    prompt = build_verbose_prompt(catalog, "Greet shrek")
     expected = [
         function.model_dump(mode="json")
         for function in sorted(
@@ -225,9 +226,40 @@ def test_prompt_preserves_non_ascii_and_strips_only() -> None:
 def test_prompt_asks_for_one_json_object(catalog: FunctionCatalog) -> None:
     prompt = build_prompt(catalog, "Greet shrek")
 
-    assert '"name"' in prompt
-    assert '"arguments"' in prompt
-    assert "ONE JSON object" in prompt
+    assert "one JSON object" in prompt
+    assert "exactly one function" in prompt
+    assert FUNCTIONS_BEGIN in prompt
+    assert FUNCTIONS_END in prompt
+
+
+def test_compact_prompt_lists_signatures_with_types(
+    catalog: FunctionCatalog,
+) -> None:
+    prompt = build_prompt(catalog, "Greet shrek")
+
+    assert "fn_add_numbers(a:number, b:number)" in prompt
+    assert "fn_greet(name:string)" in prompt
+    assert (
+        "fn_substitute_string_with_regex("
+        "source_string:string, regex:string, replacement:string)" in prompt
+    )
+    assert "Reverse a string and return the reversed result." in prompt
+    # Return types and the old JSON catalog are gone: the decoder injects the
+    # output template, so the model never needs them.
+    assert '"returns"' not in prompt
+    assert "Response format" not in prompt
+
+
+def test_compact_prompt_is_shorter_than_the_verbose_one(
+    catalog: FunctionCatalog,
+) -> None:
+    request = "Greet shrek"
+
+    compact = build_prompt(catalog, request)
+    verbose = build_verbose_prompt(catalog, request)
+
+    assert len(compact) < len(verbose) / 2
+    assert "Greet shrek" in compact
 
 
 def test_count_prompt_tokens_delegates_to_encode() -> None:

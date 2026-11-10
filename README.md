@@ -154,6 +154,27 @@ plus once per fixed segment, never per step. The default 17-prompt
 (~93% of profiled time), which the public SDK exposes without a KV cache.
 `pytest -q -m "not slow"` passes 524 tests (3 deselected, 1 xfailed); `flake8`
 and `mypy` are clean.
+T8.4 validates the <5-minute target and meets it. The prompt is now **compact**:
+`build_prompt` emits one signature line per function
+(`fn_add_numbers(a:number, b:number): Add two numbers together and return their
+sum.`) instead of the verbose JSON catalog, the "Response format" block and the
+prose instructions; names, parameters, types and descriptions are unchanged, and
+`build_verbose_prompt` keeps the old format for A/B measurement and for the
+reproducible T3.3 baseline. Prompt size drops from 383–402 to **133–151 tokens**
+and, because every model step re-reads the whole context, the mean forward pass
+drops from 1.818 s to **0.729 s** per step. Measured with the real model on all
+17 fixture prompts: 235 steps, 183.5 s of decoding, `uv run python -m src` in
+**180.24 s** (3m00s, exit 0, 17 calls, 4.9 GB RSS) against the 300 s target; a
+fresh machine adds the ~40 s model download and still fits. `src/config.py`
+replaces the estimate-from-baseline (`MEASURED_SECONDS_PER_TOKEN`) with
+`MEASURED_SECONDS_PER_STEP`, `MEASURED_STEPS_PER_PROMPT` and
+`MEASURED_SETUP_SECONDS`, so `exceeds_time_target(17)` is now `False`;
+`experiments/time_budget.py` reproduces the measurement, and
+`experiments/benchmark.md` records the full table. The compact prompt also
+improved the decoded values: 15/17 calls keep the prompt text intact and the
+remaining string-slot contamination (`'}}` tails) is tracked in T8.5.
+`pytest -q -m "not slow"` passes 531 tests (3 deselected, 1 xfailed); `flake8`
+and `mypy` are clean (39 files).
 
 Baseline measured on the development machine (CPU, Python 3.13):
 
@@ -172,9 +193,10 @@ Baseline measured on the development machine (CPU, Python 3.13):
   `"hello"` and `"olá"`;
 - unconstrained baseline (10 prompts, argmax, 48-token cap): 1/10 valid JSON,
   1/10 correct function, 1/10 correct arguments; 1301.6 s total (~130 s/prompt);
-- cost per generated token is ~2.5 s with the ~390-token 6-function prompt
-  (CPU, no KV cache in the public SDK), so the 5-minute target is at risk and
-  must be validated in T8.4.
+- cost per generated token is ~1.8 s with the ~390-token verbose prompt and
+  ~0.73 s with the ~140-token compact prompt (CPU, no KV cache in the public
+  SDK); T8.4 measured the full default run in 192.2 s, inside the 5-minute
+  target.
 
 ## Layout
 
@@ -224,7 +246,7 @@ stderr and exit with status 1; successful runs are silent.
 | M5 — Decoder | mask, argmax, generation loop | done |
 | M6 — Pipeline | orchestration, validation, output | done |
 | M7 — CLI/Packaging | `python -m src`, Makefile targets | done |
-| M8 — Hardening | errors, performance, accuracy | in progress (T8.1, T8.2, T8.3 done) |
+| M8 — Hardening | errors, performance, accuracy | in progress (T8.1–T8.4 done) |
 | M9 — Tests | unit, integration, metrics | planned |
 | M10 — Docs/Defence | README, architecture, rehearsal | planned |
 | M11 — Submission | audit, cleanup, delivery | planned |

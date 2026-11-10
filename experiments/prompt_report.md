@@ -12,42 +12,59 @@ prompt is plain text.
 
 `1-function` uses the first function of the catalog for comparison.
 
-| prompt | catalog | request | chars | tokens | functions |
-| --- | --- | --- | --- | --- | --- |
-| 0 | full | `'What is the sum of 2 and 3?'` | 1802 | 390 | 6 |
-| 0 | 1-function | `'What is the sum of 2 and 3?'` | 688 | 155 | 1 |
-| 1 | full | `'What is the sum of 265 and 345?'` | 1806 | 394 | 6 |
-| 1 | 1-function | `'What is the sum of 265 and 345?'` | 692 | 159 | 1 |
-| 2 | full | `'Greet shrek'` | 1786 | 384 | 6 |
-| 2 | 1-function | `'Greet shrek'` | 672 | 149 | 1 |
-| 3 | full | `'Greet john'` | 1785 | 383 | 6 |
-| 3 | 1-function | `'Greet john'` | 671 | 148 | 1 |
-| 4 | full | `"Reverse the string 'hello'"` | 1801 | 385 | 6 |
-| 4 | 1-function | `"Reverse the string 'hello'"` | 687 | 150 | 1 |
-| 5 | full | `"Reverse the string 'world'"` | 1801 | 385 | 6 |
-| 5 | 1-function | `"Reverse the string 'world'"` | 687 | 150 | 1 |
-| 6 | full | `'What is the square root of 16?'` | 1805 | 389 | 6 |
-| 6 | 1-function | `'What is the square root of 16?'` | 691 | 154 | 1 |
-| 7 | full | `'Calculate the square root of 144'` | 1807 | 389 | 6 |
-| 7 | 1-function | `'Calculate the square root of 144'` | 693 | 154 | 1 |
-| 8 | full | `'Replace all numbers in "Hello 34 I\'m 233 years old" with ...'` | 1839 | 401 | 6 |
-| 8 | 1-function | `'Replace all numbers in "Hello 34 I\'m 233 years old" with ...'` | 725 | 166 | 1 |
-| 9 | full | `"Replace all vowels in 'Programming is fun' with asterisks"` | 1832 | 392 | 6 |
-| 9 | 1-function | `"Replace all vowels in 'Programming is fun' with asterisks"` | 718 | 157 | 1 |
-| 10 | full | `"Substitute the word 'cat' with 'dog' in 'The cat sat on t..."` | 1856 | 402 | 6 |
-| 10 | 1-function | `"Substitute the word 'cat' with 'dog' in 'The cat sat on t..."` | 742 | 167 | 1 |
-| 11 | full | `'Turn the alarm on.'` | 1793 | 384 | 6 |
-| 11 | 1-function | `'Turn the alarm on.'` | 679 | 149 | 1 |
-| 12 | full | `'Disable the alarm before midnight.'` | 1809 | 385 | 6 |
-| 12 | 1-function | `'Disable the alarm before midnight.'` | 695 | 150 | 1 |
-| 13 | full | `'What is the sum of -12 and 7?'` | 1804 | 391 | 6 |
-| 13 | 1-function | `'What is the sum of -12 and 7?'` | 690 | 156 | 1 |
-| 14 | full | `'Reverse the string \'olá, mundo — "42"\''` | 1813 | 393 | 6 |
-| 14 | 1-function | `'Reverse the string \'olá, mundo — "42"\''` | 699 | 158 | 1 |
-| 15 | full | `"Replace every digit in 'Room 101, floor 2' with '#'"` | 1826 | 397 | 6 |
-| 15 | 1-function | `"Replace every digit in 'Room 101, floor 2' with '#'"` | 712 | 162 | 1 |
-| 16 | full | `"Do the useful thing with 42 and 'banana'."` | 1816 | 391 | 6 |
-| 16 | 1-function | `"Do the useful thing with 42 and 'banana'."` | 702 | 156 | 1 |
+| prompt | catalog | format | request | chars | tokens | functions |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | full | compact | `'What is the sum of 2 and 3?'` | 669 | 140 | 6 |
+| 0 | full | verbose | `'What is the sum of 2 and 3?'` | 1802 | 390 | 6 |
+| 0 | 1-function | compact | `'What is the sum of 2 and 3?'` | 213 | 49 | 1 |
+| 1 | full | compact | `'What is the sum of 265 and 345?'` | 673 | 144 | 6 |
+| 1 | full | verbose | `'What is the sum of 265 and 345?'` | 1806 | 394 | 6 |
+| 1 | 1-function | compact | `'What is the sum of 265 and 345?'` | 217 | 53 | 1 |
+| 2 | full | compact | `'Greet shrek'` | 653 | 134 | 6 |
+| 2 | full | verbose | `'Greet shrek'` | 1786 | 384 | 6 |
+| 2 | 1-function | compact | `'Greet shrek'` | 197 | 43 | 1 |
+| 3 | full | compact | `'Greet john'` | 652 | 133 | 6 |
+| 3 | full | verbose | `'Greet john'` | 1785 | 383 | 6 |
+| 3 | 1-function | compact | `'Greet john'` | 196 | 42 | 1 |
+| 4 | full | compact | `"Reverse the string 'hello'"` | 668 | 135 | 6 |
+| 4 | full | verbose | `"Reverse the string 'hello'"` | 1801 | 385 | 6 |
+| 4 | 1-function | compact | `"Reverse the string 'hello'"` | 212 | 44 | 1 |
+| 5 | full | compact | `"Reverse the string 'world'"` | 668 | 135 | 6 |
+| 5 | full | verbose | `"Reverse the string 'world'"` | 1801 | 385 | 6 |
+| 5 | 1-function | compact | `"Reverse the string 'world'"` | 212 | 44 | 1 |
+| 6 | full | compact | `'What is the square root of 16?'` | 672 | 139 | 6 |
+| 6 | full | verbose | `'What is the square root of 16?'` | 1805 | 389 | 6 |
+| 6 | 1-function | compact | `'What is the square root of 16?'` | 216 | 48 | 1 |
+| 7 | full | compact | `'Calculate the square root of 144'` | 674 | 139 | 6 |
+| 7 | full | verbose | `'Calculate the square root of 144'` | 1807 | 389 | 6 |
+| 7 | 1-function | compact | `'Calculate the square root of 144'` | 218 | 48 | 1 |
+| 8 | full | compact | `'Replace all numbers in "Hello 34 I\'m 233 years old" with ...'` | 706 | 151 | 6 |
+| 8 | full | verbose | `'Replace all numbers in "Hello 34 I\'m 233 years old" with ...'` | 1839 | 401 | 6 |
+| 8 | 1-function | compact | `'Replace all numbers in "Hello 34 I\'m 233 years old" with ...'` | 250 | 60 | 1 |
+| 9 | full | compact | `"Replace all vowels in 'Programming is fun' with asterisks"` | 699 | 142 | 6 |
+| 9 | full | verbose | `"Replace all vowels in 'Programming is fun' with asterisks"` | 1832 | 392 | 6 |
+| 9 | 1-function | compact | `"Replace all vowels in 'Programming is fun' with asterisks"` | 243 | 51 | 1 |
+| 10 | full | compact | `"Substitute the word 'cat' with 'dog' in 'The cat sat on t..."` | 723 | 151 | 6 |
+| 10 | full | verbose | `"Substitute the word 'cat' with 'dog' in 'The cat sat on t..."` | 1856 | 402 | 6 |
+| 10 | 1-function | compact | `"Substitute the word 'cat' with 'dog' in 'The cat sat on t..."` | 267 | 60 | 1 |
+| 11 | full | compact | `'Turn the alarm on.'` | 660 | 134 | 6 |
+| 11 | full | verbose | `'Turn the alarm on.'` | 1793 | 384 | 6 |
+| 11 | 1-function | compact | `'Turn the alarm on.'` | 204 | 43 | 1 |
+| 12 | full | compact | `'Disable the alarm before midnight.'` | 676 | 135 | 6 |
+| 12 | full | verbose | `'Disable the alarm before midnight.'` | 1809 | 385 | 6 |
+| 12 | 1-function | compact | `'Disable the alarm before midnight.'` | 220 | 44 | 1 |
+| 13 | full | compact | `'What is the sum of -12 and 7?'` | 671 | 141 | 6 |
+| 13 | full | verbose | `'What is the sum of -12 and 7?'` | 1804 | 391 | 6 |
+| 13 | 1-function | compact | `'What is the sum of -12 and 7?'` | 215 | 50 | 1 |
+| 14 | full | compact | `'Reverse the string \'olá, mundo — "42"\''` | 680 | 143 | 6 |
+| 14 | full | verbose | `'Reverse the string \'olá, mundo — "42"\''` | 1813 | 393 | 6 |
+| 14 | 1-function | compact | `'Reverse the string \'olá, mundo — "42"\''` | 224 | 52 | 1 |
+| 15 | full | compact | `"Replace every digit in 'Room 101, floor 2' with '#'"` | 693 | 147 | 6 |
+| 15 | full | verbose | `"Replace every digit in 'Room 101, floor 2' with '#'"` | 1826 | 397 | 6 |
+| 15 | 1-function | compact | `"Replace every digit in 'Room 101, floor 2' with '#'"` | 237 | 56 | 1 |
+| 16 | full | compact | `"Do the useful thing with 42 and 'banana'."` | 683 | 141 | 6 |
+| 16 | full | verbose | `"Do the useful thing with 42 and 'banana'."` | 1816 | 391 | 6 |
+| 16 | 1-function | compact | `"Do the useful thing with 42 and 'banana'."` | 227 | 50 | 1 |
 
 ## Run
 
