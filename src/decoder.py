@@ -1,8 +1,11 @@
-"""Slot-scoped constrained-decoding token masks (T5.1).
+"""Slot-scoped constrained-decoding masks and logits selection (T5.1-T5.2).
 
 The decoder only asks for tokens while the DFA is inside a model-filled slot.
 Fixed template text is injected by the decoder and must never be emitted by the
 model, so :func:`allowed_token_ids` returns ``()`` in every injected state.
+:func:`masked_logits` applies ``-inf`` outside the allowed set and
+:func:`select_next_token` performs the guarded argmax; the generation loop and
+EOS handling remain in T5.3.
 
 No transition cache is used here. A cache key would need the whole DFA state,
 including ``name_buffer``, ``number_buffer``, ``literal_buffer`` and
@@ -13,11 +16,21 @@ profiling-driven cache sizing, is deferred to T8.3.
 from __future__ import annotations
 
 import copy
+from collections.abc import Iterable
+
+import numpy as np
+from numpy.typing import ArrayLike
 
 from src.dfa import DFA, DFAState, is_complete_number
+from src.errors import DecodingError
 from src.vocab import TokenizerIndex
 
-__all__ = ["allowed_token_ids", "slot_can_stop"]
+__all__ = [
+    "allowed_token_ids",
+    "masked_logits",
+    "select_next_token",
+    "slot_can_stop",
+]
 
 # States reachable while the model is still allowed to generate inside one slot.
 # The closing name quote, comma/brace delimiters and all key/structural text are
@@ -120,6 +133,73 @@ def allowed_token_ids(dfa: DFA, index: TokenizerIndex) -> tuple[int, ...]:
                 allowed.add(token_id)
 
     return tuple(sorted(allowed))
+
+
+def masked_logits(
+    logits: ArrayLike,
+    allowed_ids: Iterable[int],
+) -> np.ndarray:
+    """Return float64 scores with only ``allowed_ids`` left selectable.
+
+    Every non-finite input score (NaN, ``+inf`` or ``-inf``) is sanitized to
+    ``-np.inf`` so it can never be selected. The output is always a new
+    all-``-inf`` array of the same length; allowed finite positions copy their
+    sanitized scores. The input sequence is never mutated.
+
+    Raises:
+        ValueError: if ``logits`` is not one-dimensional or an allowed id is
+            not an ``int`` in ``[0, len(logits))``.
+    """
+    scores = np.asarray(logits, dtype=np.float64)
+    if scores.ndim != 1:
+        raise ValueError(
+            f"logits must be one-dimensional, got shape {scores.shape}"
+        )
+
+    sanitized = scores.copy()
+    sanitized[~np.isfinite(sanitized)] = -np.inf
+
+    masked = np.full(sanitized.shape, -np.inf, dtype=np.float64)
+    size = sanitized.shape[0]
+    for token_id in allowed_ids:
+        if isinstance(token_id, bool) or not isinstance(token_id, int):
+            raise ValueError(
+                f"allowed token id {token_id!r} is not an int "
+                f"(logits size {size})"
+            )
+        if token_id < 0 or token_id >= size:
+            raise ValueError(
+                f"allowed token id {token_id} outside [0, {size})"
+            )
+        masked[token_id] = sanitized[token_id]
+    return masked
+
+
+def select_next_token(
+    logits: ArrayLike,
+    allowed_ids: Iterable[int],
+) -> int:
+    """Select the highest-scoring allowed token id with a guarded argmax.
+
+    ``allowed_ids`` may be any iterable, including a caller-provided EOS id; this
+    function does not add EOS itself. Ties resolve to the lowest id because
+    ``np.argmax`` returns the first maximum.
+
+    Raises:
+        DecodingError: if no allowed score is finite after masking.
+        ValueError: if masking rejects the logits shape or an allowed id.
+    """
+    ids = tuple(allowed_ids)
+    masked = masked_logits(logits, ids)
+    if not np.isfinite(masked).any():
+        raise DecodingError(
+            f"no valid token: {len(ids)} allowed id(s) but all masked "
+            f"scores are -inf (logits size {masked.size})"
+        )
+
+    token_id = int(np.argmax(masked))
+    assert np.isfinite(masked[token_id])
+    return token_id
 
 
 def slot_can_stop(dfa: DFA) -> bool:

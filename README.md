@@ -23,7 +23,7 @@ an injectable fake. `src/prompt.py` builds a deterministic plain-text prompt
 template; measured sizes are 383–402 tokens with the full 6-function catalog and
 148–167 tokens with a single function. The input catalog, the output call
 models, the JSON loaders and the project-wide error policy are defined and
-validated with Pydantic (416 tests: 415 passing, one documented xfail, plus a
+validated with Pydantic (438 tests: 437 passing, one documented xfail, plus a
 slow round-trip suite against the real model). The unconstrained baseline
 (10 prompts, argmax, 48-token cap) produced
 **1/10 valid JSON, 1/10 correct function and 1/10 correct arguments**. The
@@ -42,7 +42,11 @@ slot-scoped T5.1 mask: `allowed_token_ids` returns `()` outside model-filled
 slots so fixed text is always injected, rejects multi-character tokens that
 cross into a fixed closing quote/comma/brace, and never mutates the input
 machine. `slot_can_stop` marks complete name/number/boolean values for T5.3 EOS
-handling. The decoded-cache benchmark (5-run median after one warm-up, measured
+handling. T5.2 adds `masked_logits`, which sanitizes every non-finite score to
+`-inf` and keeps only allowed positions, and `select_next_token`, which raises
+`DecodingError` when the mask has no finite score and otherwise returns the
+lowest-id argmax. The T5.3 generation loop/EOS integration is next. The
+decoded-cache benchmark (5-run median after one warm-up, measured
 on the development machine; wall-clock varies about ±20%) measured
 NAME_VALUE 2 candidates/101 ms, PARAM_VALUE_START 302/512 ms,
 PARAM_VALUE_STRING 147k/2971 ms, PARAM_VALUE_NUMBER 13/654 ms,

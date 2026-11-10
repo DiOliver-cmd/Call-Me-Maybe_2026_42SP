@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 import copy
+from typing import Any
 
-from src.decoder import allowed_token_ids, slot_can_stop
+import numpy as np
+import pytest
+
+from src.decoder import (
+    allowed_token_ids,
+    masked_logits,
+    select_next_token,
+    slot_can_stop,
+)
 from src.dfa import DFA, DFAState
+from src.errors import DecodingError
 from src.vocab import TokenizerIndex, TokenizerVocab, build_token_index
 
 _NAMES = [
@@ -499,3 +509,138 @@ def test_oracle_matches_brute_force_for_six_slot_states() -> None:
 
     for dfa in states:
         assert allowed_token_ids(dfa, index) == _brute_allowed(dfa, index)
+
+
+# T5.2: -inf mask, guarded argmax and all-masked detection.
+
+
+def test_invalid_high_logit_is_never_selected() -> None:
+    logits = [0.0, 100.0, 1.0, 2.0, 3.0]
+
+    assert select_next_token(logits, [0, 2]) == 2
+
+
+def test_only_allowed_logits_are_compared() -> None:
+    logits = [100.0, 1.0, 50.0, 2.0, 75.0]
+
+    assert select_next_token(logits, [1, 3]) == 3
+
+
+def test_all_masked_allowed_ids_raise_decoding_error() -> None:
+    logits = [0.0, -np.inf, -np.inf, 2.0]
+
+    with pytest.raises(DecodingError) as excinfo:
+        select_next_token(logits, [1, 2])
+
+    message = str(excinfo.value)
+    assert "no valid token" in message
+    assert "2 allowed" in message
+    assert "size 4" in message
+
+
+def test_empty_allowed_ids_raise_decoding_error() -> None:
+    with pytest.raises(DecodingError) as excinfo:
+        select_next_token([0.0, 1.0, 2.0], [])
+
+    message = str(excinfo.value)
+    assert "no valid token" in message
+    assert "0 allowed" in message
+    assert "size 3" in message
+
+
+def test_non_finite_allowed_scores_are_sanitized() -> None:
+    logits = [0.0, np.nan, 1.0, np.inf]
+
+    assert select_next_token(logits, [1, 2, 3]) == 2
+    assert masked_logits(logits, [3])[3] == -np.inf
+
+    with pytest.raises(DecodingError):
+        select_next_token(logits, [3])
+
+
+def test_all_nan_and_infinite_scores_raise_decoding_error() -> None:
+    with pytest.raises(DecodingError):
+        select_next_token([np.nan, np.inf, -np.inf], [0, 1, 2])
+
+
+def test_masked_logits_copies_only_allowed_finite_scores() -> None:
+    logits = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    original = logits.copy()
+
+    masked = masked_logits(logits, [0, 2, 4])
+
+    assert masked.dtype == np.float64
+    assert masked.shape == logits.shape
+    assert masked[0] == 1.0
+    assert masked[2] == 3.0
+    assert masked[4] == 5.0
+    assert np.isneginf(masked[1])
+    assert np.isneginf(masked[3])
+    assert np.array_equal(logits, original)
+
+
+def test_masked_logits_sanitizes_non_finite_and_never_mutates() -> None:
+    logits = np.array([1.0, np.nan, np.inf, -np.inf, 2.0])
+    original = logits.copy()
+
+    masked = masked_logits(logits, [0, 2, 3, 4])
+
+    assert masked[0] == 1.0
+    assert masked[4] == 2.0
+    assert np.isneginf(masked[1])
+    assert np.isneginf(masked[2])
+    assert np.isneginf(masked[3])
+    assert np.array_equal(logits, original, equal_nan=True)
+
+
+def test_masked_logits_empty_allowed_is_all_negative_infinity() -> None:
+    masked = masked_logits([1.0, 2.0, 3.0], [])
+
+    assert masked.dtype == np.float64
+    assert np.isneginf(masked).all()
+
+
+@pytest.mark.parametrize("bad_id", [-1, 5, 6, 1.0, "1", None, True])
+def test_masked_logits_rejects_bad_allowed_ids(bad_id: Any) -> None:
+    with pytest.raises(ValueError) as excinfo:
+        masked_logits([0.0] * 5, [bad_id])
+
+    message = str(excinfo.value)
+    assert "allowed token id" in message
+    assert repr(bad_id) in message
+    assert "5" in message
+
+
+def test_masked_logits_rejects_non_1d_logits() -> None:
+    bad_logits: Any = [[1.0, 2.0], [3.0, 4.0]]
+
+    with pytest.raises(ValueError, match="one-dimensional"):
+        masked_logits(bad_logits, [0])
+
+
+def test_tied_scores_select_the_lowest_id() -> None:
+    assert select_next_token([0.0, 5.0, 5.0, 0.0], [1, 2, 3]) == 1
+
+
+def test_duplicate_allowed_ids_do_not_change_the_result() -> None:
+    logits = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+
+    assert select_next_token(logits, [2, 2, 4]) == 4
+    assert np.array_equal(
+        masked_logits(logits, [2, 2, 4]),
+        masked_logits(logits, [2, 4]),
+    )
+
+
+def test_realistic_vocab_size_mask_has_only_two_finite_scores() -> None:
+    logits = np.full(151936, -5.0)
+    logits[1234] = 1.0
+    logits[150000] = 2.0
+    allowed = [1234, 150000]
+
+    masked = masked_logits(logits, allowed)
+
+    assert masked.shape == (151936,)
+    assert masked.dtype == np.float64
+    assert int(np.isfinite(masked).sum()) == 2
+    assert select_next_token(logits, allowed) == 150000
