@@ -1,0 +1,112 @@
+"""Pipeline orchestration: prompt batch to validated function calls (T6.1).
+
+The pipeline owns the reusable tokenizer index and the prompt loop, while
+:func:`src.decoder.decode_call` owns one constrained generation. Calls are
+processed in input order and the original prompt text is preserved by the
+decoder. If any prompt fails, the run raises instead of returning a partial
+list, so a caller cannot accidentally write incomplete output (T6.3).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from src.data_loader import PathLike, load_functions, load_prompts
+from src.decoder import decode_call
+from src.errors import DecodingError, ProjectError
+from src.llm_client import LLMClient
+from src.schemas import FunctionCall
+from src.vocab import (
+    TokenizerIndex,
+    build_token_index,
+    build_token_text_via_decode,
+    load_token_text_cache,
+    parse_tokenizer_json,
+    save_token_text_cache,
+)
+
+__all__ = [
+    "DEFAULT_TOKEN_TEXT_CACHE",
+    "build_decoder_index",
+    "run",
+]
+
+DEFAULT_TOKEN_TEXT_CACHE = Path(".cache/token_text.json")
+
+
+def build_decoder_index(
+    model: LLMClient | None = None,
+    *,
+    cache_path: PathLike = DEFAULT_TOKEN_TEXT_CACHE,
+) -> TokenizerIndex:
+    """Build the decoder index using the tokenizer asset and a text cache.
+
+    The tokenizer metadata always comes from ``model.tokenizer_path()``. A cache
+    that exists but is stale or partial is discarded after any
+    :class:`ProjectError` from loading and rebuilt from the current tokenizer.
+    A successful rebuild writes the cache through
+    :func:`save_token_text_cache`, creating its parent directory first.
+    """
+    client = model or LLMClient()
+    vocab = parse_tokenizer_json(client.tokenizer_path())
+    cache_file = Path(cache_path)
+
+    texts: dict[int, str] | None = None
+    if cache_file.exists():
+        try:
+            texts = load_token_text_cache(
+                cache_file,
+                expected_size=vocab.vocab_size,
+            )
+        except ProjectError:
+            texts = None
+
+    if texts is None:
+        texts = build_token_text_via_decode(
+            client,
+            range(vocab.vocab_size),
+        )
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        save_token_text_cache(cache_file, texts)
+
+    return build_token_index(vocab, texts)
+
+
+def run(
+    functions_path: PathLike,
+    input_path: PathLike,
+    *,
+    model: LLMClient | None = None,
+    index: TokenizerIndex | None = None,
+    eos_token_id: int | None = None,
+) -> list[FunctionCall]:
+    """Decode one function call per prompt, preserving input order.
+
+    ``index`` is injectable for deterministic tests and avoids touching the
+    token-text cache. Any :class:`ProjectError` from a prompt is wrapped in a
+    :class:`DecodingError` naming the zero-based prompt position and its text;
+    the exception aborts the run, so no partial list is returned.
+    """
+    catalog = load_functions(functions_path)
+    prompts = load_prompts(input_path)
+    client = model or LLMClient()
+    decoder_index = index or build_decoder_index(client)
+
+    calls: list[FunctionCall] = []
+    for prompt_index, prompt in enumerate(prompts):
+        try:
+            calls.append(
+                decode_call(
+                    client,
+                    catalog,
+                    prompt,
+                    index=decoder_index,
+                    eos_token_id=eos_token_id,
+                )
+            )
+        except ProjectError as exc:
+            raise DecodingError(
+                f"prompt {prompt_index} ({prompt!r}) failed: {exc}"
+            ) from exc
+
+    return calls

@@ -43,6 +43,10 @@ class LLMBackend(Protocol):
         """Return the path to the vocabulary asset."""
         ...
 
+    def get_path_to_tokenizer_file(self) -> str:
+        """Return the path to the tokenizer asset."""
+        ...
+
 
 class LLMClient:
     """Normalize the SDK's public methods behind a small, testable interface."""
@@ -86,6 +90,10 @@ class LLMClient:
     def vocab_path(self) -> str:
         """Return the path to the vocabulary asset."""
         return self._get_backend().get_path_to_vocab_file()
+
+    def tokenizer_path(self) -> str:
+        """Return the path to the tokenizer asset."""
+        return self._get_backend().get_path_to_tokenizer_file()
 
 
 def _normalize_ids(value: Any) -> list[int]:
