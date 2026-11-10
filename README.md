@@ -23,7 +23,7 @@ an injectable fake. `src/prompt.py` builds a deterministic plain-text prompt
 template; measured sizes are 383–402 tokens with the full 6-function catalog and
 148–167 tokens with a single function. The input catalog, the output call
 models, the JSON loaders and the project-wide error policy are defined and
-validated with Pydantic (452 tests: 451 passing, one documented xfail, plus a
+validated with Pydantic (461 tests: 460 passing, one documented xfail, plus a
 slow round-trip suite against the real model). The unconstrained baseline
 (10 prompts, argmax, 48-token cap) produced
 **1/10 valid JSON, 1/10 correct function and 1/10 correct arguments**. The
@@ -49,8 +49,11 @@ lowest-id argmax. T5.3 adds `decode_call`, which alternates tokenized fixed
 injection with model-filled name/value slots, never calls logits for fixed text,
 resolves `<|im_end|>`/`<|endoftext|>` when EOS is not supplied, counts every
 logits call including EOS against `MAX_TOKENS`, and returns a validated
-`FunctionCall` only after `ACCEPT`. The T5.4 fake-matrix hardening is next. The
-decoded-cache benchmark (5-run median after one warm-up, measured
+`FunctionCall` only after `ACCEPT`. T5.4 hardens the deterministic fake matrix
+with a reusable `ScriptedLLM`, high-logit distractors, boolean/empty/multi-string
+slots, escaped Unicode, explicit EOS overrides and exact `MAX_TOKENS` boundaries.
+The T6.1 pipeline orchestration is next. The decoded-cache benchmark (5-run
+median after one warm-up, measured
 on the development machine; wall-clock varies about ±20%) measured
 NAME_VALUE 2 candidates/101 ms, PARAM_VALUE_START 302/512 ms,
 PARAM_VALUE_STRING 147k/2971 ms, PARAM_VALUE_NUMBER 13/654 ms,
