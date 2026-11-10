@@ -21,8 +21,9 @@ an injectable fake. `src/prompt.py` builds a deterministic plain-text prompt
 template; measured sizes are 383–402 tokens with the full 6-function catalog and
 148–167 tokens with a single function. The input catalog, the output call
 models, the JSON loaders and the project-wide error policy are defined and
-validated with Pydantic (331 tests plus a slow round-trip suite against the real
-model). The unconstrained baseline (10 prompts, argmax, 48-token cap) produced
+validated with Pydantic (399 tests: 398 passing, one documented xfail, plus a
+slow round-trip suite against the real model). The unconstrained baseline
+(10 prompts, argmax, 48-token cap) produced
 **1/10 valid JSON, 1/10 correct function and 1/10 correct arguments**. The
 budget is `MAX_TOKENS = 48`, a 300 s total deadline and a 180 s per-prompt safety
 valve; on this CPU the worst case is 36.9 min, so the 5-minute target is

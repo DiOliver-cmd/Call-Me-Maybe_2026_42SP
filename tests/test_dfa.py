@@ -1,4 +1,4 @@
-"""Unit tests for the output-template DFA states, transitions and slots (T4.1-T4.3)."""
+"""Unit tests for the output-template DFA, slots and case matrix (T4.1-T4.6)."""
 
 from __future__ import annotations
 
@@ -115,6 +115,39 @@ def _assert_token_atomic_rejection(dfa: DFA, text: str) -> None:
     assert _snapshot(dfa) == before
     assert dfa.consume_token(text) is False
     assert _snapshot(dfa) == before
+
+
+def _assert_rejected_at(
+    text: str,
+    index: int,
+    names: list[str] | None = None,
+) -> None:
+    """Assert rejection at ``index`` after accepting every earlier char.
+
+    ``index == len(text)`` represents end-of-input rejection, used for
+    unclosed root, string and parameter cases.
+    """
+    dfa = DFA.start(names)
+    for position, char in enumerate(text):
+        accepted = dfa.consume(char)
+        if position == index:
+            assert accepted is False, (
+                f"expected rejection at index {index} ({char!r}), "
+                f"but {dfa.state.name} accepted it"
+            )
+            return
+        assert accepted is True, (
+            f"unexpected rejection at index {position} ({char!r}) "
+            f"from {dfa.state.name}"
+        )
+    assert index == len(text), (
+        f"expected rejection at index {index}, "
+        f"but all {len(text)} chars were accepted"
+    )
+    assert dfa.is_accepting() is False, (
+        f"expected end-of-input rejection at index {index}, "
+        "but the machine accepted"
+    )
 
 
 def test_enum_contains_the_documented_states() -> None:
@@ -699,4 +732,315 @@ def test_full_template_one_char_per_token_reaches_accept() -> None:
             assert dfa.is_accepting() is False
 
     assert dfa.state is DFAState.ACCEPT
+    assert dfa.is_accepting() is True
+
+
+_COMPLETE_CALL = '{"prompt":"x","name":"fn","parameters":{}}'
+_NUMBER_PREFIX = '{"prompt":"x","name":"fn","parameters":{"n":'
+_BOOLEAN_PREFIX = '{"prompt":"x","name":"fn","parameters":{"ok":'
+_NAME_PREFIX = '{"prompt":"x","name":"'
+_ESCAPE_PREFIX = '{"prompt":"'
+
+
+def _number_doc(value: str) -> str:
+    return _NUMBER_PREFIX + value + "}}"
+
+
+def _boolean_doc(value: str) -> str:
+    return _BOOLEAN_PREFIX + value + "}}"
+
+
+def _name_doc(name: str) -> str:
+    return _NAME_PREFIX + name + '","parameters":{}}'
+
+
+def _escape_doc(escaped: str) -> str:
+    return _ESCAPE_PREFIX + escaped + '","name":"fn","parameters":{}}'
+
+
+@pytest.mark.parametrize(
+    ("text", "names"),
+    [
+        (
+            '{"prompt":"hi","name":"fn_greet","parameters":{"name":"bob"}}',
+            ["fn_greet"],
+        ),
+        (
+            '{"prompt":"sum","name":"fn_add_numbers",'
+            '"parameters":{"a":1,"b":2}}',
+            ["fn_add_numbers"],
+        ),
+        (
+            '{"prompt":"ping","name":"fn_ping","parameters":{}}',
+            ["fn_ping"],
+        ),
+        (
+            r'{"prompt":"a \"name\": {1} and \"parameters\": [3]",'
+            r'"name":"fn_greet","parameters":{"name":"José"}}',
+            ["fn_greet"],
+        ),
+    ],
+)
+def test_matrix_full_valid_json_reaches_accept(
+    text: str,
+    names: list[str],
+) -> None:
+    assert _walk(text, names).is_accepting() is True
+
+
+@pytest.mark.parametrize(
+    ("text", "index"),
+    [
+        ('{"name":"fn_greet","parameters":{}}', 32),
+        ('{"prompt":"x","parameters":{}}', 27),
+        ('{"prompt":"x","name":"fn_greet"}', 31),
+        ('{"prompt":"x", ,"name":"fn","parameters":{}}', 15),
+        (
+            '{"prompt":"x","name":"fn","parameters":{"a":1,}}',
+            46,
+        ),
+        ('{"prompt":"x" "name":"fn","parameters":{}}', 14),
+        ('{"prompt":"x","name":"fn","parameters":{}', 41),
+        ('{"prompt":"x', 12),
+        (
+            '{"prompt":"x","name":"fn","parameters":{"a":1}',
+            46,
+        ),
+        (' {"prompt":"x","name":"fn","parameters":{}}', 0),
+        (_COMPLETE_CALL + " ", 42),
+    ],
+)
+def test_matrix_structural_invalid_rejected_at_exact_index(
+    text: str,
+    index: int,
+) -> None:
+    _assert_rejected_at(text, index)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "DFA validates structure but not key text; fixed-key injection (T4.5) "
+        "keeps keys out of model generation. See issue #25."
+    ),
+)
+def test_matrix_wrong_key_order_is_rejected() -> None:
+    _assert_rejected_at('{"name":"fn","prompt":"x","parameters":{}}', 2)
+
+
+def test_matrix_internal_json_whitespace_is_valid() -> None:
+    text = '{"prompt": "x","name": "fn","parameters":{ "a": 1 }}'
+
+    assert _walk(text, ["fn"]).is_accepting() is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["0", "-1", "1.5", "1e3", "1E-2", "-0.5"],
+)
+def test_matrix_valid_numbers_reach_accept(value: str) -> None:
+    assert _walk(_number_doc(value), ["fn"]).is_accepting() is True
+
+
+@pytest.mark.parametrize(
+    ("value", "offset"),
+    [
+        ("01", 1),
+        ("-", 1),
+        ("1.", 2),
+        ("1e", 2),
+        ("1e+", 3),
+        (".5", 0),
+        ("--1", 1),
+        ("1.2.3", 3),
+        ("NaN", 0),
+        ("Infinity", 0),
+        ("1x", 1),
+    ],
+)
+def test_matrix_invalid_numbers_rejected_at_exact_index(
+    value: str,
+    offset: int,
+) -> None:
+    _assert_rejected_at(
+        _number_doc(value),
+        len(_NUMBER_PREFIX) + offset,
+        ["fn"],
+    )
+
+
+@pytest.mark.parametrize("value", ["true", "false"])
+def test_matrix_valid_booleans_reach_accept(value: str) -> None:
+    assert _walk(_boolean_doc(value), ["fn"]).is_accepting() is True
+
+
+@pytest.mark.parametrize(
+    ("value", "offset"),
+    [
+        ("tru", 3),
+        ("True", 0),
+        ("FALSE", 0),
+        ("yes", 0),
+    ],
+)
+def test_matrix_invalid_booleans_rejected_at_exact_index(
+    value: str,
+    offset: int,
+) -> None:
+    _assert_rejected_at(
+        _boolean_doc(value),
+        len(_BOOLEAN_PREFIX) + offset,
+        ["fn"],
+    )
+
+
+@pytest.mark.parametrize("name", ["fn_add", "fn_add_numbers"])
+def test_matrix_common_prefix_names_are_accepted(name: str) -> None:
+    names = ["fn_add", "fn_add_numbers"]
+
+    assert _walk(_name_doc(name), names).is_accepting() is True
+
+
+@pytest.mark.parametrize(
+    ("name", "offset"),
+    [
+        ("fn_add_number", len("fn_add_number")),
+        ("fn_add_numbersX", len("fn_add_numbers")),
+        ("fn_", len("fn_")),
+    ],
+)
+def test_matrix_bad_common_prefix_names_rejected_at_exact_index(
+    name: str,
+    offset: int,
+) -> None:
+    _assert_rejected_at(
+        _name_doc(name),
+        len(_NAME_PREFIX) + offset,
+        ["fn_add", "fn_add_numbers"],
+    )
+
+
+@pytest.mark.parametrize(
+    "escaped",
+    [
+        r"\"",
+        r"\\",
+        r"\/",
+        r"\b",
+        r"\f",
+        r"\n",
+        r"\r",
+        r"\t",
+        r"\u00e9",
+    ],
+)
+def test_matrix_valid_string_escapes_reach_accept(escaped: str) -> None:
+    assert _walk(_escape_doc(escaped)).is_accepting() is True
+
+
+@pytest.mark.parametrize(
+    ("escaped", "offset"),
+    [
+        (r"\x", 1),
+        (r"\u12", 4),
+        (r"\uZZZZ", 2),
+    ],
+)
+def test_matrix_invalid_string_escapes_rejected_at_exact_index(
+    escaped: str,
+    offset: int,
+) -> None:
+    _assert_rejected_at(
+        _escape_doc(escaped),
+        len(_ESCAPE_PREFIX) + offset,
+    )
+
+
+@pytest.mark.parametrize(
+    ("prefix", "token", "expected_state"),
+    [
+        (
+            '{"prompt":"x","name":"fn","parameters":{"s":"x',
+            '"}',
+            DFAState.PARAMETERS_CLOSED,
+        ),
+        ('{"prompt":"x"', ',"', DFAState.NAME_KEY_STRING),
+        (
+            '{"prompt":"x","name":"fn","parameters":{"n"',
+            ":1",
+            DFAState.PARAM_VALUE_NUMBER,
+        ),
+        (
+            '{"prompt":"x","name":"fn","parameters":{"n":',
+            "2.0",
+            DFAState.PARAM_VALUE_NUMBER,
+        ),
+        (
+            '{"prompt":"x","name":"fn","parameters":{"ok":',
+            "true",
+            DFAState.PARAM_VALUE_BOOLEAN,
+        ),
+        (
+            '{"prompt":"x","name":"fn","parameters":{"ok":',
+            "false",
+            DFAState.PARAM_VALUE_BOOLEAN,
+        ),
+        ('{"prompt":"x', r"\u00e9", DFAState.PROMPT_VALUE),
+    ],
+)
+def test_matrix_multichar_tokens_commit(
+    prefix: str,
+    token: str,
+    expected_state: DFAState,
+) -> None:
+    dfa = _walk(prefix)
+
+    assert dfa.consume_token(token) is True
+    assert dfa.state is expected_state
+
+
+def test_matrix_multichar_token_buffers_commit() -> None:
+    number_dfa = _walk('{"prompt":"x","name":"fn","parameters":{"n"')
+    assert number_dfa.consume_token(":1") is True
+    assert number_dfa.number_buffer == "1"
+
+    boolean_dfa = _walk('{"prompt":"x","name":"fn","parameters":{"ok":')
+    assert boolean_dfa.consume_token("false") is True
+    assert boolean_dfa.literal_buffer == "false"
+
+
+def test_matrix_invalid_multichar_token_is_atomic() -> None:
+    dfa = _walk('{"prompt":"x')
+
+    _assert_token_atomic_rejection(dfa, r"\uZZZZ")
+
+
+def test_matrix_prompt_literal_keys_do_not_switch_states() -> None:
+    text = (
+        r'{"prompt":"a \"name\": {1} and \"parameters\": [3]",'
+        r'"name":"fn_greet","parameters":{"name":"José"}}'
+    )
+    boundary = r'{"prompt":"a \"name\": {1} and \"parameters\": [3]'
+    dfa = DFA.start(["fn_greet"])
+
+    for char in boundary:
+        assert dfa.consume(char) is True
+    assert dfa.state is DFAState.PROMPT_VALUE
+
+    for char in text[len(boundary):]:
+        assert dfa.consume(char) is True
+    assert dfa.is_accepting() is True
+
+
+def test_matrix_common_prefix_name_does_not_close_early() -> None:
+    names = ["fn_add", "fn_add_numbers"]
+    dfa = DFA.start(names)
+
+    for char in '{"prompt":"x","name":"fn_add':
+        assert dfa.consume(char) is True
+    assert dfa.state is DFAState.NAME_VALUE
+    assert dfa.name_buffer == "fn_add"
+
+    for char in '_numbers","parameters":{}}':
+        assert dfa.consume(char) is True
     assert dfa.is_accepting() is True
