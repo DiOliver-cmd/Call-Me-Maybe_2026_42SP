@@ -107,6 +107,12 @@ PARAM_VALUE_BOOLEAN 2/90 ms, PARAM_VALUE_DONE 0/0 ms and ACCEPT 0/0 ms per step.
 The string-value state still validates ~150k token texts across 17,773/17,805
 buckets, so its fast path and caching work remain deferred to T8.3. Full
 documentation is delivered in the `docs` milestone.
+T7.4 validates a clean clone (HTTPS clone into `/tmp`): `uv sync` (5.9 s) is the
+only install step, `python -m src --help` works, a one-prompt
+`{"prompt": "Greet shrek"}` run builds the token cache and returns
+`fn_greet(name="shrek")` in 50.7 s, the default 17-prompt run finishes in 18m05s,
+`pytest -q -m "not slow"` passes 491 tests, and the tree has no tracked
+model/cache files or absolute `/mnt/c` or `/home` paths.
 
 Baseline measured on the development machine (CPU, Python 3.13):
 
