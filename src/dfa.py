@@ -91,6 +91,7 @@ maps whole token texts onto these characters.
 
 from __future__ import annotations
 
+import copy
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -276,6 +277,46 @@ class DFA:
         self.number_buffer = ""
         self.literal_buffer = ""
         self.unicode_remaining = 0
+
+    def try_consume_token(self, text: str) -> DFA | None:
+        """Try to consume one complete token text atomically.
+
+        ``text`` is token text and may contain one or several characters, such
+        as ``","``, ``"}"``, ``"2.0"``, ``"true"`` or ``"\\u00e9"``. The machine
+        is shallow-copied and each character is passed to :meth:`consume` on the
+        copy. If any character fails, ``None`` is returned and ``self`` is
+        untouched. An empty string succeeds and returns an identical copy.
+
+        On success the returned :class:`DFA` is a new object, not ``self``.
+        """
+        candidate = copy.copy(self)
+        for char in text:
+            if not candidate.consume(char):
+                return None
+        return candidate
+
+    def consume_token(self, text: str) -> bool:
+        """Consume one complete token text, committing only on full success.
+
+        This is the atomic token-level wrapper used by the decoder. ``text`` is
+        token text and may span several characters; multi-character tokens such
+        as ``","``, ``"}"``, ``"2.0"``, ``"true"`` and ``"\\u00e9"`` are common.
+        Empty text is a successful no-op.
+
+        On failure the method returns ``False`` and leaves the state and every
+        slot buffer unchanged. On success it commits the advanced state and
+        buffers from :meth:`try_consume_token` into ``self`` and returns
+        ``True``.
+        """
+        advanced = self.try_consume_token(text)
+        if advanced is None:
+            return False
+        self.state = advanced.state
+        self.name_buffer = advanced.name_buffer
+        self.number_buffer = advanced.number_buffer
+        self.literal_buffer = advanced.literal_buffer
+        self.unicode_remaining = advanced.unicode_remaining
+        return True
 
     def consume(self, char: str) -> bool:
         """Consume one character, validating the active slot atomically.

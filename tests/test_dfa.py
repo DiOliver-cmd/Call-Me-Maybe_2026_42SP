@@ -83,7 +83,7 @@ def _rejects(text: str, names: list[str] | None = None) -> bool:
 
 
 def _snapshot(dfa: DFA) -> tuple[object, str, str, str, int]:
-    """Return the mutable fields that a failed ``consume`` must preserve."""
+    """Return the mutable fields a failed consume must preserve."""
     return (
         dfa.state,
         dfa.name_buffer,
@@ -105,6 +105,15 @@ def _assert_atomic_rejection(
 
     before = _snapshot(dfa)
     assert dfa.consume(bad) is False
+    assert _snapshot(dfa) == before
+
+
+def _assert_token_atomic_rejection(dfa: DFA, text: str) -> None:
+    """Assert that token rejection leaves every mutable field unchanged."""
+    before = _snapshot(dfa)
+    assert dfa.try_consume_token(text) is None
+    assert _snapshot(dfa) == before
+    assert dfa.consume_token(text) is False
     assert _snapshot(dfa) == before
 
 
@@ -533,3 +542,161 @@ def test_failed_consume_is_atomic(
     names: list[str],
 ) -> None:
     _assert_atomic_rejection(prefix, bad, names)
+
+
+def test_try_consume_token_returns_a_new_advanced_machine() -> None:
+    dfa = _walk('{"prompt":"x","name":"fn","parameters":{"n":')
+
+    advanced = dfa.try_consume_token("2.0")
+
+    assert advanced is not None
+    assert advanced is not dfa
+    assert advanced.state is DFAState.PARAM_VALUE_NUMBER
+    assert advanced.number_buffer == "2.0"
+    assert dfa.state is DFAState.PARAM_VALUE_START
+    assert dfa.number_buffer == ""
+
+
+def test_try_consume_token_returns_none_and_keeps_original() -> None:
+    dfa = _walk('{"prompt":"x","name":"fn","parameters":{"n":')
+    before = _snapshot(dfa)
+
+    assert dfa.try_consume_token("2x") is None
+    assert _snapshot(dfa) == before
+
+
+def test_consume_token_accepts_comma_after_prompt_value() -> None:
+    dfa = _walk('{"prompt":"x"')
+
+    assert dfa.consume_token(",") is True
+    assert dfa.state is DFAState.NAME_KEY
+
+
+def test_consume_token_accepts_quote_comma() -> None:
+    dfa = _walk('{"prompt":"x')
+
+    assert dfa.consume_token('",') is True
+    assert dfa.state is DFAState.NAME_KEY
+
+
+def test_consume_token_accepts_quote_brace() -> None:
+    prefix = '{"prompt":"x","name":"fn","parameters":{"s":"x'
+    dfa = _walk(prefix)
+
+    assert dfa.consume_token('"}') is True
+    assert dfa.state is DFAState.PARAMETERS_CLOSED
+
+
+def test_consume_token_accepts_single_brace() -> None:
+    dfa = _walk('{"prompt":"x","name":"fn","parameters":{')
+
+    assert dfa.consume_token("}") is True
+    assert dfa.state is DFAState.PARAMETERS_CLOSED
+
+
+def test_consume_token_accepts_number_text() -> None:
+    dfa = _walk('{"prompt":"x","name":"fn","parameters":{"n":')
+
+    assert dfa.consume_token("2.0") is True
+    assert dfa.state is DFAState.PARAM_VALUE_NUMBER
+    assert dfa.number_buffer == "2.0"
+
+
+def test_consume_token_accepts_boolean_text() -> None:
+    dfa = _walk('{"prompt":"x","name":"fn","parameters":{"ok":')
+
+    assert dfa.consume_token("true") is True
+    assert dfa.state is DFAState.PARAM_VALUE_BOOLEAN
+    assert dfa.literal_buffer == "true"
+
+
+def test_consume_token_accepts_quoted_function_name() -> None:
+    dfa = _walk(
+        '{"prompt":"x","name":',
+        ["fn_add", "fn_add_numbers"],
+    )
+
+    assert dfa.consume_token('"fn_add_numbers"') is True
+    assert dfa.state is DFAState.NAME_VALUE_DONE
+    assert dfa.name_buffer == "fn_add_numbers"
+
+
+def test_consume_token_accepts_unicode_escape_inside_string() -> None:
+    dfa = _walk('{"prompt":"x')
+
+    assert dfa.consume_token("\\u00e9") is True
+    assert dfa.state is DFAState.PROMPT_VALUE
+    assert dfa.unicode_remaining == 0
+
+
+def test_unicode_remaining_is_maintained_across_tokens() -> None:
+    dfa = _walk('{"prompt":"x')
+
+    assert dfa.consume_token("\\u00") is True
+    assert dfa.unicode_remaining == 2
+
+    assert dfa.consume_token("e9") is True
+    assert dfa.unicode_remaining == 0
+    assert dfa.state is DFAState.PROMPT_VALUE
+
+
+@pytest.mark.parametrize(
+    ("prefix", "text", "names"),
+    [
+        ("", "x", None),
+        ('{"prompt":"x","name":', '"x', ["fn"]),
+        ('{"prompt":"x","name":"fn","parameters":{"n":', "2x", ["fn"]),
+        ('{"prompt":"x","name":"fn","parameters":{"ok":', "trX", ["fn"]),
+    ],
+)
+def test_consume_token_failure_is_atomic(
+    prefix: str,
+    text: str,
+    names: list[str] | None,
+) -> None:
+    dfa = _walk(prefix, names)
+
+    _assert_token_atomic_rejection(dfa, text)
+
+
+def test_partial_token_success_survives_a_later_failure() -> None:
+    dfa = _walk('{"prompt":"x","name":"fn","parameters":{"n":')
+
+    assert dfa.consume_token("2.0") is True
+    after_success = _snapshot(dfa)
+
+    assert dfa.consume_token("x") is False
+    assert _snapshot(dfa) == after_success
+
+
+def test_try_consume_token_empty_returns_identical_copy() -> None:
+    dfa = _walk('{"prompt":"x')
+    before = _snapshot(dfa)
+
+    advanced = dfa.try_consume_token("")
+
+    assert advanced is not None
+    assert advanced is not dfa
+    assert _snapshot(advanced) == before
+    assert _snapshot(dfa) == before
+
+
+def test_consume_token_empty_is_a_noop_success() -> None:
+    dfa = _walk('{"prompt":"x')
+    before = _snapshot(dfa)
+
+    assert dfa.consume_token("") is True
+    assert _snapshot(dfa) == before
+
+
+def test_full_template_one_char_per_token_reaches_accept() -> None:
+    text = _call("fn_greet")
+    dfa = DFA.start(["fn_greet"])
+
+    for index, char in enumerate(text):
+        assert dfa.consume_token(char) is True
+        if index < len(text) - 1:
+            assert dfa.is_accepting() is False
+
+    assert dfa.state is DFAState.ACCEPT
+    assert dfa.is_accepting() is True
