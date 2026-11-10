@@ -92,6 +92,13 @@ prompts in 17m00s, and `python -m src` completes them in 16m54s. The numeric
 fixtures now decode correctly (`2/3`, `265/345`, `-12/7`, `16`, `144`); remaining
 wrong values are string-slot contamination (`"world}}"`, regex tails), tracked
 outside T7.2. Real command evidence is recorded on the issue.
+T7.3 validates the auxiliary Makefile targets: `make debug` opens pdb at
+`src/__main__.py` via `uv run python -m pdb -m src` and quits cleanly (exit 0);
+`make clean` removes `data/output`, `.pytest_cache`, `.mypy_cache` and every
+`__pycache__` while preserving `.venv`, `llm_sdk/`, `.cache/token_text.json` and
+all 76 tracked files (no `D` entries); `make lint` runs both flake8 and mypy
+(`Success: no issues found in 37 source files`); and `make test` passes 491
+tests (3 deselected, 1 xfailed). No Makefile path/order bug was found.
 The decoded-cache benchmark (5-run median after one warm-up, measured
 on the development machine; wall-clock varies about ±20%) measured
 NAME_VALUE 2 candidates/101 ms, PARAM_VALUE_START 302/512 ms,
