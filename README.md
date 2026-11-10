@@ -6,7 +6,7 @@ Function-calling tool with **constrained decoding** on top of `Qwen/Qwen3-0.6B`:
 the model proposes the next token, a DFA masks every token that would break the
 JSON grammar, and the pipeline writes one function call per user prompt.
 
-Status: M0–M6 complete; M7 (CLI) next — `src/vocab.py`
+Status: M0–M6 complete; M7 (CLI) in progress — `src/vocab.py`
 parses `tokenizer.json` (`model.vocab` + `added_tokens`), builds `token_text` via
 the SDK's public `decode`, and indexes tokens by first character so a step
 narrows the 151,643 allowed tokens before the prefix/DFA check; structural
@@ -23,7 +23,7 @@ an injectable fake. `src/prompt.py` builds a deterministic plain-text prompt
 template; measured sizes are 383–402 tokens with the full 6-function catalog and
 148–167 tokens with a single function. The input catalog, the output call
 models, the JSON loaders and the project-wide error policy are defined and
-validated with Pydantic (482 tests: 481 passing, one documented xfail, plus a
+validated with Pydantic (489 tests: 488 passing, one documented xfail, plus a
 slow round-trip suite against the real model). The unconstrained baseline
 (10 prompts, argmax, 48-token cap) produced
 **1/10 valid JSON, 1/10 correct function and 1/10 correct arguments**. The
@@ -73,6 +73,9 @@ elapsed time. Measured on the cached CPU model: `fn_greet(name="shrek")` in
 27.56 s, written to `data/output/e2e_real.json`; the fake path takes 0.22 s. The
 literal sum prompt currently exhausts `MAX_TOKENS` because the greedy model
 rambles in the number slot (`2.0000...`); that is recorded for T8.4/T8.5.
+T7.1 adds `src/__main__.py`: `python -m src` exposes the three subject flags,
+forwards them to `run`/`write_output`, prints only `error: ...` for expected
+project failures, and returns a nonzero exit code without a traceback.
 The decoded-cache benchmark (5-run median after one warm-up, measured
 on the development machine; wall-clock varies about ±20%) measured
 NAME_VALUE 2 candidates/101 ms, PARAM_VALUE_START 302/512 ms,
@@ -125,6 +128,20 @@ make lint      # flake8 + mypy
 make clean     # remove caches and generated output
 ```
 
+## CLI
+
+`python -m src` uses these optional flags (defaults shown):
+
+```bash
+uv run python -m src \
+  --functions_definition data/input/functions_definition.json \
+  --input data/input/function_calling_tests.json \
+  --output data/output/function_calling_results.json
+```
+
+`-h/--help` lists the flags. Expected project failures print `error: ...` to
+stderr and exit with status 1; successful runs are silent.
+
 ## Roadmap
 
 | Milestone | Scope | Status |
@@ -136,7 +153,7 @@ make clean     # remove caches and generated output
 | M4 — Grammar/DFA | states, slots, transitions | done |
 | M5 — Decoder | mask, argmax, generation loop | done |
 | M6 — Pipeline | orchestration, validation, output | done |
-| M7 — CLI/Packaging | `python -m src`, Makefile targets | planned |
+| M7 — CLI/Packaging | `python -m src`, Makefile targets | in progress |
 | M8 — Hardening | errors, performance, accuracy | planned |
 | M9 — Tests | unit, integration, metrics | planned |
 | M10 — Docs/Defence | README, architecture, rehearsal | planned |
