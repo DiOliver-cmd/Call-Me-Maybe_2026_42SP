@@ -9,13 +9,19 @@ list, so a caller cannot accidentally write incomplete output (T6.3).
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
+from collections.abc import Sequence
 from pathlib import Path
+
+from pydantic import ValidationError
 
 from src.data_loader import PathLike, load_functions, load_prompts
 from src.decoder import decode_call
-from src.errors import DecodingError, ProjectError
+from src.errors import DecodingError, ProjectError, SchemaError
 from src.llm_client import LLMClient
-from src.schemas import FunctionCall
+from src.schemas import FunctionCall, FunctionCallBatch
 from src.vocab import (
     TokenizerIndex,
     build_token_index,
@@ -29,6 +35,7 @@ __all__ = [
     "DEFAULT_TOKEN_TEXT_CACHE",
     "build_decoder_index",
     "run",
+    "write_output",
 ]
 
 DEFAULT_TOKEN_TEXT_CACHE = Path(".cache/token_text.json")
@@ -109,3 +116,46 @@ def run(
             ) from exc
 
     return calls
+
+
+def write_output(path: PathLike, calls: Sequence[FunctionCall]) -> None:
+    """Validate and atomically write the function-call batch as JSON.
+
+    Validation happens before any filesystem change, so an invalid call leaves
+    both the target and its parent untouched. The payload is written to a
+    temporary file in the target directory, flushed and fsynced, then published
+    with :func:`os.replace`; any failure removes the temporary file and
+    re-raises, so a reader never observes a partial output file.
+    """
+    try:
+        batch = FunctionCallBatch.model_validate(list(calls))
+    except ValidationError as exc:
+        raise SchemaError(f"invalid function call batch: {exc}") from exc
+
+    payload = [call.model_dump(mode="json") for call in batch.root]
+    target = Path(path)
+    parent = target.parent
+    parent.mkdir(parents=True, exist_ok=True)
+
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        assert temp_path is not None
+        os.replace(temp_path, target)
+    except BaseException:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+        raise

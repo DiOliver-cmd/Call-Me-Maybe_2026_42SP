@@ -9,7 +9,7 @@ import pytest
 
 from src.errors import DecodingError, SchemaError
 from src.llm_client import LLMClient
-from src.pipeline import build_decoder_index, run
+from src.pipeline import build_decoder_index, run, write_output
 from src.schemas import FunctionCall
 from src.vocab import TokenizerIndex
 from tests.fakes import ScriptedLLM
@@ -256,3 +256,75 @@ def test_build_decoder_index_rebuilds_a_stale_cache(tmp_path: Path) -> None:
 
     assert index.texts == {0: "a", 1: "b", 2: "<|im_end|>"}
     assert len(backend.decode_calls) == 3
+
+
+def _output_calls() -> list[FunctionCall]:
+    return [
+        FunctionCall(
+            prompt="Greet José",
+            name="fn_greet",
+            parameters={"name": "José"},
+        ),
+        FunctionCall(prompt="Ping", name="fn_ping", parameters={}),
+        FunctionCall(
+            prompt="Add numbers",
+            name="fn_add_numbers",
+            parameters={"a": 2, "b": 3.5},
+        ),
+    ]
+
+
+def test_write_output_creates_parent_and_writes_json(tmp_path: Path) -> None:
+    target = tmp_path / "sub" / "out.json"
+    calls = _output_calls()
+
+    write_output(target, calls)
+
+    assert target.exists()
+    assert target.parent.is_dir()
+    raw = target.read_text(encoding="utf-8")
+    assert json.loads(raw) == [call.model_dump(mode="json") for call in calls]
+    assert "José" in raw
+    assert '"Jos\\u00e9"' not in raw
+    assert raw.splitlines()[1].startswith("  ")
+    assert raw.endswith("\n")
+    assert [entry.name for entry in target.parent.iterdir()] == ["out.json"]
+
+
+def test_write_output_validates_before_writing(tmp_path: Path) -> None:
+    target = tmp_path / "out.json"
+    invalid_calls: list[FunctionCall] = [{"prompt": "x"}]  # type: ignore[list-item]
+
+    with pytest.raises(SchemaError, match="invalid function call batch"):
+        write_output(target, invalid_calls)
+
+    assert not target.exists()
+
+
+def test_write_output_removes_temp_on_serialization_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "sub" / "out.json"
+
+    def fail_dump(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("serialization failed")
+
+    monkeypatch.setattr("src.pipeline.json.dump", fail_dump)
+
+    with pytest.raises(RuntimeError, match="serialization failed"):
+        write_output(target, _output_calls())
+
+    assert not target.exists()
+    assert target.parent.is_dir()
+    assert list(target.parent.iterdir()) == []
+
+
+def test_output_directory_is_gitignored() -> None:
+    gitignore = Path(__file__).resolve().parents[1] / ".gitignore"
+    patterns = [
+        line.strip()
+        for line in gitignore.read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert "data/output/" in patterns
