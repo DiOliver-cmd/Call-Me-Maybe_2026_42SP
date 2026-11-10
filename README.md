@@ -6,7 +6,7 @@ Function-calling tool with **constrained decoding** on top of `Qwen/Qwen3-0.6B`:
 the model proposes the next token, a DFA masks every token that would break the
 JSON grammar, and the pipeline writes one function call per user prompt.
 
-Status: M0–M6 complete; M7 (CLI) in progress — `src/vocab.py`
+Status: M0–M7 complete; M8 (hardening) in progress — `src/vocab.py`
 parses `tokenizer.json` (`model.vocab` + `added_tokens`), builds `token_text` via
 the SDK's public `decode`, and indexes tokens by first character so a step
 narrows the 151,643 allowed tokens before the prefix/DFA check; structural
@@ -111,8 +111,17 @@ T7.4 validates a clean clone (HTTPS clone into `/tmp`): `uv sync` (5.9 s) is the
 only install step, `python -m src --help` works, a one-prompt
 `{"prompt": "Greet shrek"}` run builds the token cache and returns
 `fn_greet(name="shrek")` in 50.7 s, the default 17-prompt run finishes in 18m05s,
-`pytest -q -m "not slow"` passes 491 tests, and the tree has no tracked
+`pytest -q -m "not slow"` passes 503 tests, and the tree has no tracked
 model/cache files or absolute `/mnt/c` or `/home` paths.
+T8.1 hardens the input-error matrix: `FunctionDefinition.parameters` is now
+required, so omitting the key is a schema error while an explicit `{}` stays a
+valid zero-parameter function. Every bad input exercised through `main(argv)` —
+missing functions file, invalid JSON, an empty catalog (list or
+`{"functions": []}`), a function without `parameters`, an unsupported parameter
+type, an empty prompt list, a blank prompt and an `--input` directory — returns
+exit code 1, prints a single `error: ...` line to stderr and never a traceback;
+the loaders run before any model construction. `pytest -q -m "not slow"` passes
+503 tests (3 deselected, 1 xfailed).
 
 Baseline measured on the development machine (CPU, Python 3.13):
 
@@ -182,8 +191,8 @@ stderr and exit with status 1; successful runs are silent.
 | M4 — Grammar/DFA | states, slots, transitions | done |
 | M5 — Decoder | mask, argmax, generation loop | done |
 | M6 — Pipeline | orchestration, validation, output | done |
-| M7 — CLI/Packaging | `python -m src`, Makefile targets | in progress |
-| M8 — Hardening | errors, performance, accuracy | planned |
+| M7 — CLI/Packaging | `python -m src`, Makefile targets | done |
+| M8 — Hardening | errors, performance, accuracy | in progress (T8.1 done) |
 | M9 — Tests | unit, integration, metrics | planned |
 | M10 — Docs/Defence | README, architecture, rehearsal | planned |
 | M11 — Submission | audit, cleanup, delivery | planned |

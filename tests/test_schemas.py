@@ -30,6 +30,7 @@ def _minimal_function() -> dict[str, Any]:
     return {
         "name": "fn_echo",
         "description": "Echo a value back to the caller.",
+        "parameters": {},
         "returns": {"type": "string"},
     }
 
@@ -79,7 +80,10 @@ def test_duplicate_function_name_is_rejected() -> None:
         FunctionCatalog.model_validate([_minimal_function(), _minimal_function()])
 
 
-@pytest.mark.parametrize("missing", ["name", "description", "returns"])
+@pytest.mark.parametrize(
+    "missing",
+    ["name", "description", "parameters", "returns"],
+)
 def test_missing_required_field_is_rejected(missing: str) -> None:
     raw = _minimal_function()
     raw.pop(missing)

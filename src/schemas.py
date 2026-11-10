@@ -81,7 +81,7 @@ class FunctionDefinition(BaseModel):
 
     name: str
     description: str
-    parameters: dict[str, ParameterSpec] = {}
+    parameters: dict[str, ParameterSpec]
     returns: ParameterSpec
 
     @field_validator("name")
