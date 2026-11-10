@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from src.decoder import (
+    NUMBER_EOS_BONUS,
     _resolve_eos_token_id,
     allowed_token_ids,
     decode_call,
@@ -707,6 +708,12 @@ def _decoder_catalog() -> FunctionCatalog:
                 },
                 "returns": {"type": "string"},
             },
+            {
+                "name": "fn_sqrt",
+                "description": "Square root.",
+                "parameters": {"x": {"type": "number"}},
+                "returns": {"type": "number"},
+            },
         ]
     )
 
@@ -750,6 +757,60 @@ def _scripted_model(
     **kwargs: Any,
 ) -> tuple[LLMClient, ScriptedLLM]:
     backend = ScriptedLLM(script, **kwargs)
+    return LLMClient(backend=backend), backend
+
+
+class _PeekScriptedLLM:
+    """Scripted backend that only drops a token once it is actually consumed.
+
+    ``ScriptedLLM`` pops the next id on every logits call, so a token that
+    loses the argmax still disappears from the script. This backend keeps
+    favouring ``script[0]`` at 10.0 but removes it only when a later input-id
+    sequence shows the token was appended. A skipped high-logit candidate thus
+    stays visible in ``script`` for assertions.
+    """
+
+    def __init__(self, script: list[int], *, size: int = 2048) -> None:
+        self.script = list(script)
+        self.size = size
+        self.calls = 0
+        self.decode_calls: list[list[int]] = []
+        self._served: int | None = None
+        self._input_ids: list[int] | None = None
+
+    def encode(self, text: str) -> list[list[int]]:
+        return [[ord(char) for char in text]]
+
+    def decode(self, ids: list[int]) -> str:
+        self.decode_calls.append(list(ids))
+        return "".join(chr(token_id) for token_id in ids)
+
+    def get_logits_from_input_ids(self, input_ids: list[int]) -> list[float]:
+        assert self.script, "logits called after the script was exhausted"
+        self.calls += 1
+        if self._served is not None and self._input_ids is not None:
+            appended = input_ids[len(self._input_ids) :]
+            # EOS never enters ``input_ids`` when it closes a slot, so treat a
+            # served EOS as consumed once the decoder asks for another token.
+            if self._served == _EOS_ID or self._served in appended:
+                self.script.pop(0)
+
+        token_id = self.script[0]
+        logits = [-1.0] * self.size
+        logits[token_id] = 10.0
+        self._served = token_id
+        self._input_ids = list(input_ids)
+        return logits
+
+    def get_path_to_vocab_file(self) -> str:
+        return "unused"
+
+    def get_path_to_tokenizer_file(self) -> str:
+        return "unused"
+
+
+def _peek_model(script: list[int]) -> tuple[LLMClient, _PeekScriptedLLM]:
+    backend = _PeekScriptedLLM(script)
     return LLMClient(backend=backend), backend
 
 
@@ -956,6 +1017,68 @@ def test_decode_call_fills_multiple_number_slots_with_eos() -> None:
         parameters={"a": 1, "b": 2},
     )
     assert backend.calls == len(script)
+
+
+def test_number_eos_bonus_stops_complete_number_before_dot() -> None:
+    catalog = _decoder_catalog()
+    script = (
+        _tokens("fn_sqrt")
+        + [_EOS_ID]
+        + _tokens("2")
+        + _tokens(".")
+        + _tokens("0")
+        + [_EOS_ID]
+    )
+    model, backend = _peek_model(script)
+
+    call = decode_call(
+        model,
+        catalog,
+        "Square root of 2",
+        index=_decoder_index(),
+        number_eos_bonus=NUMBER_EOS_BONUS,
+    )
+
+    assert call == FunctionCall(
+        prompt="Square root of 2",
+        name="fn_sqrt",
+        parameters={"x": 2},
+    )
+    # The boosted EOS won over the high-logit dot, so the dot and every later
+    # scripted token are still pending: nothing past the integer was consumed.
+    assert backend.script == [ord("."), ord("0"), _EOS_ID]
+    assert ord(".") not in backend.decode_calls[-1]
+
+
+def test_zero_number_eos_bonus_still_extends_number_past_dot() -> None:
+    catalog = _decoder_catalog()
+    script = (
+        _tokens("fn_sqrt")
+        + [_EOS_ID]
+        + _tokens("2")
+        + _tokens(".")
+        + _tokens("0")
+        + [_EOS_ID]
+    )
+    model, backend = _peek_model(script)
+
+    call = decode_call(
+        model,
+        catalog,
+        "Square root of 2",
+        index=_decoder_index(),
+        number_eos_bonus=0.0,
+    )
+
+    assert call == FunctionCall(
+        prompt="Square root of 2",
+        name="fn_sqrt",
+        parameters={"x": 2.0},
+    )
+    # Without the bonus the raw dot logit wins, exactly as before the fix.
+    assert ord(".") in backend.decode_calls[-1]
+    assert ord(".") not in backend.script
+    assert backend.script == [_EOS_ID]
 
 
 # T5.4: fake-LLM matrix for masking, slot shapes and exact budgets.
