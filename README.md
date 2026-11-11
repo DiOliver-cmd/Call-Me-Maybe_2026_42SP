@@ -433,7 +433,7 @@ deviation is recorded in [`experiments/accuracy.md`](experiments/accuracy.md).
 The suite is deterministic by default and does not download the model:
 
 ```bash
-make test       # 557 passed, 6 deselected, 1 xfailed
+make test       # 576 passed, 7 deselected, 1 xfailed
 make test-all   # includes the slow, model-backed tests
 make lint       # flake8 + mypy
 ```
@@ -441,7 +441,10 @@ make lint       # flake8 + mypy
 - **Unit tests** cover the DFA (every state, valid/invalid/boundary transitions
   and multi-character tokens), the mask, logit sanitization, argmax, EOS, the
   prompt/template and the schema/loaders. `tests/test_validation.py` adds the
-  catalog/type/extra-key matrix and `validate_call` error precedence.
+  catalog/type/extra-key matrix and `validate_call` error precedence;
+  `tests/test_edge_cases.py` covers escaped/Unicode strings, extreme numbers,
+  booleans, three-parameter calls, ambiguous prompts and prompts with no
+  matching function.
 - **Fakes** (`tests/fakes.py`) provide `FakeLLM` and `ScriptedLLM`. The scripted
   backend plays a fixed token sequence, records every call and can inject a
   high-logit invalid token (`distractors`), so masking is tested without a model.
@@ -454,6 +457,8 @@ make lint       # flake8 + mypy
   numerical checks; `make test` deselects them. `tests/test_integration.py`
   runs the sum, greeting and reverse prompts through the CLI and validates the
   written JSON, the catalog signature and the scalar types (about 85 s locally).
+  The edge-case module keeps its fake matrix fast and marks its single
+  real-model check `slow` as well.
 - **Accuracy and performance** are reproduced by `experiments/accuracy.py`,
   `experiments/time_budget.py` and `experiments/profile_decode.py`, not by
   assertions on wall-clock time.
@@ -706,7 +711,7 @@ evidence in the issue and a README/diary update at the end of the session.
 | M6 — Pipeline | orchestration, validation, output | done |
 | M7 — CLI/Packaging | `python -m src`, Makefile | done |
 | M8 — Hardening | errors, performance, accuracy | done (T8.1–T8.5) |
-| M9 — Tests | unit, integration, metrics | in progress (T9.1–T9.2 done) |
+| M9 — Tests | unit, integration, metrics | in progress (T9.1–T9.3 done) |
 | M10 — Docs/Defence | README, architecture, rehearsal | in progress |
 | M11 — Submission | audit, cleanup, delivery | planned |
 
