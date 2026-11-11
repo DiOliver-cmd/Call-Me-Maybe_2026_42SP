@@ -71,7 +71,8 @@ constrained decoding and measures the semantic half honestly:
 The structural guarantee comes from a DFA with 30 states plus a mask over the
 151,936 model logits. The semantic gap is concentrated in long string values and
 is documented rather than hidden behind heuristics. See
-[`experiments/accuracy.md`](experiments/accuracy.md) for the full table.
+[`experiments/accuracy.md`](experiments/accuracy.md) for the full table and
+[`experiments/report.md`](experiments/report.md) for the packaged metrics.
 
 ---
 
@@ -433,7 +434,7 @@ deviation is recorded in [`experiments/accuracy.md`](experiments/accuracy.md).
 The suite is deterministic by default and does not download the model:
 
 ```bash
-make test       # 576 passed, 7 deselected, 1 xfailed
+make test       # 580 passed, 7 deselected, 1 xfailed
 make test-all   # includes the slow, model-backed tests
 make lint       # flake8 + mypy
 ```
@@ -461,7 +462,10 @@ make lint       # flake8 + mypy
   real-model check `slow` as well.
 - **Accuracy and performance** are reproduced by `experiments/accuracy.py`,
   `experiments/time_budget.py` and `experiments/profile_decode.py`, not by
-  assertions on wall-clock time.
+  assertions on wall-clock time. `experiments/metrics.py` packages the saved
+  output into [`experiments/report.md`](experiments/report.md): JSON/schema
+  validity, function/argument accuracy and runtime; `--fake` checks the report
+  without a model.
 
 The one `xfail` is deliberate: the DFA validates the template structure but not
 the key **order**; fixed injection makes the order irrelevant in the pipeline.
@@ -711,7 +715,7 @@ evidence in the issue and a README/diary update at the end of the session.
 | M6 — Pipeline | orchestration, validation, output | done |
 | M7 — CLI/Packaging | `python -m src`, Makefile | done |
 | M8 — Hardening | errors, performance, accuracy | done (T8.1–T8.5) |
-| M9 — Tests | unit, integration, metrics | in progress (T9.1–T9.3 done) |
+| M9 — Tests | unit, integration, metrics | in progress (T9.1–T9.4 done) |
 | M10 — Docs/Defence | README, architecture, rehearsal | in progress |
 | M11 — Submission | audit, cleanup, delivery | planned |
 
