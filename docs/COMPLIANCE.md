@@ -19,7 +19,7 @@ is not hidden.
 | JSON valid / schema-compliant | **17/17 (100%)** |
 | Correct function | **16/16 (100%)** |
 | Correct arguments | **11/16 (68.8%)** fresh; 10/16 (62.5%) recorded — below 90%, documented deviation |
-| Full run < 5 minutes | **329.37 s** on this 8-core host; **180.24 s** on the recorded 20-core host — at risk |
+| Full run < 5 minutes | **180.24 s** on the 20-core target; **329.37 s** on this 8-core audit — accepted hardware caveat |
 | Forbidden libraries | none in `src/` |
 | Public SDK only | yes, `LLMClient` uses only public methods |
 | Pydantic | all input/output data models; internal algorithm types are dataclasses |
@@ -27,10 +27,11 @@ is not hidden.
 | Fast tests | 580 passed, 7 deselected, 1 xfailed |
 | Lint | flake8 + mypy clean (46 source files) |
 
-The argument target is a documented deviation. The runtime target is **not
-confirmed on this host**; the 20-core measurement meets it, but the 8-core audit
-does not. The follow-up blocker is tracked in #103. T11.1 itself is the audit;
-#103 must be resolved before submission.
+The argument target is a documented deviation. The runtime target is accepted on
+the 20-core target hardware; the 8-core audit is above it and is kept as a
+hardware caveat. Prompt-shortening and thread-count experiments regressed the
+model's stop behavior or function choice, so the compact prompt is unchanged.
+The decision is recorded in #103 (closed).
 
 ---
 
@@ -110,7 +111,7 @@ recorded on the 20-core development machine.
 | Valid JSON/schema 100% | PASS | 17/17 parsed and validated by `FunctionCallBatch` |
 | Function accuracy ≥ 90% | PASS | 16/16 (100%) |
 | Argument accuracy ≥ 90% | **FAIL (documented deviation)** | 11/16 (68.8%) fresh; 10/16 (62.5%) recorded; six/eight string-slot failures; see `experiments/accuracy.md` |
-| Full run < 5 minutes | **AT RISK** | 329.37 s on 8-core WSL; 180.24 s on 20-core dev machine; see #103 |
+| Full run < 5 minutes | **ACCEPTED on target** | 180.24 s on the 20-core target; 329.37 s on the 8-core audit is a documented hardware caveat; #103 closed |
 | No keyword heuristic | PASS | decision is masked argmax in `src/decoder.py`; no prompt keyword table |
 | Robust errors, no traceback | PASS | `ProjectError` hierarchy; CLI prints `error: ...` and exits 1; error matrix tests |
 | Live catalog modification | PASS | data-driven prompt/DFA/validation; `docs/ARCHITECTURE.md` map; drill A dry-run |
@@ -141,7 +142,7 @@ recorded on the 20-core development machine.
 | Repository, `pyproject.toml`, `uv.lock`, `uv sync` | tracked files; `uv sync --frozen --offline` |
 | Makefile targets | `Makefile`; audit command |
 | Error handling, no crash, clear messages | `src/errors.py`; `src/__main__.py`; `tests/test_errors.py` |
-| Performance: < 5 min, cache, short prompts, greedy | README; `experiments/benchmark.md`; blocker below |
+| Performance: < 5 min, cache, short prompts, greedy | README; `experiments/benchmark.md`; hardware caveat below |
 | Accuracy ≥ 90% selection and extraction; how measured | `experiments/accuracy.md`; `experiments/report.md`; argument deviation |
 | Tests with artificial vocabulary + real model | `tests/test_dfa.py`; `tests/test_integration.py`; `tests/test_vocab.py` |
 | README in English with all required sections | README headings 48–727 |
@@ -150,27 +151,22 @@ recorded on the 20-core development machine.
 
 ---
 
-## Findings and blockers
+## Findings and caveats
 
-### 1. Runtime on 8 cores is above the target (blocker)
+### 1. Runtime on 8 cores is above the target (accepted hardware caveat)
 
 The subject requires the whole run under 5 minutes on standard hardware. On this
 8-vCPU WSL host the exact command took **329.37 s**; the model load alone was
 **50.9 s** and the forward pass averaged **1.017 s/step** over the first three
 prompts. The recorded 20-core development machine ran the same pipeline in
 **180.24 s** (8.75 s setup, 0.729 s/step). The requirement is therefore met on
-the recorded target but **not confirmed on this host**.
+the recorded target; the 8-core result is kept as a hardware caveat.
 
-Options, in order of preference:
-
-1. Verify on the actual 20-core/target hardware (no code change).
-2. Reduce prompt/decoding cost enough to absorb the slower host; measure again
-   with the full fixture.
-3. Accept the recorded 20-core result as the target measurement, with this
-   hardware caveat documented.
-
-This is a submission blocker until one option is chosen. It is tracked in
-**#103**.
+The decision was to accept the 20-core result as the target measurement. The
+T11.1a experiments also tested three prompt-shortening variants and
+`OMP_NUM_THREADS=4`: the prompt variants changed the function choice or caused
+`MAX_TOKENS` on the regex prompt, and the thread change moved 1.017 to
+1.004 s/step. None was promoted. The decision is recorded in **#103** (closed).
 
 ### 2. Argument accuracy remains below 90% (justified deviation)
 
@@ -202,6 +198,6 @@ README and the range in this audit.
 
 ## Status
 
-T11.1 audit complete. The runtime blocker is tracked in **#103**; it must be
-resolved before submission. This audit does not claim the < 5 min target on
-8 cores.
+T11.1 audit complete. Runtime is accepted on the 20-core target; the 8-core
+result is a documented hardware caveat and **#103 is closed**. This audit does
+not claim the < 5 min target on 8 cores.

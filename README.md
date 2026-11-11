@@ -396,9 +396,11 @@ decoding. The full run is the subject's exact command:
 | Peak RSS | 4.9 GB |
 | Fresh-machine download | ~40 s, total ~232 s, still < 300 s |
 
-The 180.24 s figure is the 20-core development machine. A T11.1 audit on an
-8-vCPU WSL host measured **329.37 s** (50.9 s model load, ~1.017 s/step), so the
-< 5 min target is not confirmed on that host; the blocker is tracked in #103 and
+The 180.24 s figure is the accepted 20-core target measurement. A T11.1 audit on
+an 8-vCPU WSL host measured **329.37 s** (50.9 s model load, ~1.017 s/step); that
+result is kept as a documented hardware caveat, not hidden. Prompt-shortening
+and thread-count experiments regressed the model's stop behavior or function
+choice, so the compact prompt is unchanged. The decision is in #103 (closed);
 the full audit is in [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md).
 
 The T8.3 profile measured the mask before the compact prompt: mask 8.128 s
@@ -542,7 +544,7 @@ JSON.
 | Valid JSON and schema-compliant output | **100%**, by construction | DFA + Pydantic; 17/17 calls |
 | Correct function ≥ 90% | **100%** (16/16 defined) | `experiments/accuracy.md` |
 | Correct arguments ≥ 90% | **62.5%** (10/16 recorded; 68.8% audit), justified deviation | `experiments/accuracy.md`; [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md) |
-| Full run < 5 minutes | **180.24 s** on 20-core; **329.37 s** on 8-core audit — at risk | `experiments/benchmark.md`; [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md); #103 |
+| Full run < 5 minutes | **180.24 s** on the 20-core target; **329.37 s** on 8-core audit — accepted hardware caveat | `experiments/benchmark.md`; [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md); #103 closed |
 | Pydantic validates all input/output models | yes | `src/schemas.py`; strict types, `extra="forbid"`; internal algorithm types are dataclasses |
 | No guided-generation library | yes | no `outlines`/`vLLM`/`guidance`/`dspy` in `src/` |
 | No `torch`/`transformers` in application code | yes | `src/` imports neither; `torch` is pinned only as the SDK CPU runtime backend |
@@ -556,12 +558,12 @@ JSON.
 | Robust errors, no traceback | yes | `error: ...` + exit 1; error matrix tests |
 
 The argument-extraction target is the one unmet accuracy metric on the recorded
-output; the runtime is hardware-sensitive and is at risk on 8 cores. Both are
-reported explicitly rather than masked, and the project does not add a keyword
-or regex post-processing step to inflate the number. The full audit, with
-commands and per-requirement evidence, is in
-[`docs/COMPLIANCE.md`](docs/COMPLIANCE.md); the runtime blocker is tracked in
-#103.
+output; the runtime is hardware-sensitive, with the 20-core target meeting it and
+the 8-core result kept as a documented caveat. Both are reported explicitly
+rather than masked, and the project does not add a keyword or regex
+post-processing step to inflate the number. The full audit, with commands and
+per-requirement evidence, is in
+[`docs/COMPLIANCE.md`](docs/COMPLIANCE.md); the decision is in #103 (closed).
 
 ---
 
@@ -734,7 +736,7 @@ evidence in the issue and a README/diary update at the end of the session.
 | M8 — Hardening | errors, performance, accuracy | done (T8.1–T8.5) |
 | M9 — Tests | unit, integration, metrics | done (T9.1–T9.4) |
 | M10 — Docs/Defence | README, architecture, rehearsal | done (T10.1–T10.4) |
-| M11 — Submission | audit, cleanup, delivery | in progress (T11.1 audit; blocker #103) |
+| M11 — Submission | audit, cleanup, delivery | in progress (T11.1 done; T11.2 cleanup) |
 
 ---
 
