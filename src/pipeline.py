@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -21,7 +21,8 @@ from src.data_loader import PathLike, load_functions, load_prompts
 from src.decoder import NUMBER_EOS_BONUS, decode_call
 from src.errors import DecodingError, ModelError, ProjectError, SchemaError
 from src.llm_client import LLMClient
-from src.schemas import FunctionCall, FunctionCallBatch
+from src.prompt import build_prompt
+from src.schemas import FunctionCall, FunctionCallBatch, FunctionCatalog
 from src.vocab import (
     TokenizerIndex,
     build_token_index,
@@ -93,6 +94,7 @@ def run(
     model: LLMClient | None = None,
     index: TokenizerIndex | None = None,
     eos_token_id: int | None = None,
+    prompt_builder: Callable[[FunctionCatalog, str], str] = build_prompt,
 ) -> list[FunctionCall]:
     """Decode one function call per prompt, preserving input order.
 
@@ -100,6 +102,10 @@ def run(
     token-text cache. Any :class:`ProjectError` from a prompt is wrapped in a
     :class:`DecodingError` naming the zero-based prompt position and its text;
     the exception aborts the run, so no partial list is returned.
+
+    ``prompt_builder`` defaults to :func:`src.prompt.build_prompt`; it exists
+    so accuracy experiments can compare prompt formats without reimplementing
+    the batch loop.
     """
     catalog = load_functions(functions_path)
     prompts = load_prompts(input_path)
@@ -116,6 +122,7 @@ def run(
                 index=decoder_index,
                 eos_token_id=eos_token_id,
                 number_eos_bonus=NUMBER_EOS_BONUS,
+                prompt_builder=prompt_builder,
             )
             calls.append(catalog.validate_call(call))
         except ProjectError as exc:

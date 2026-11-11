@@ -11,7 +11,7 @@ from src.decoder import NUMBER_EOS_BONUS
 from src.errors import DecodingError, SchemaError
 from src.llm_client import LLMClient
 from src.pipeline import build_decoder_index, run, write_output
-from src.schemas import FunctionCall
+from src.schemas import FunctionCall, FunctionCatalog
 from src.vocab import TokenizerIndex
 from tests.fakes import ScriptedLLM
 
@@ -167,6 +167,29 @@ def test_run_preserves_order_prompts_and_parameters(
     assert calls[1].parameters == {"name": "bob"}
     assert calls[2].parameters == {}
     assert backend.calls == len(script)
+
+
+def test_run_forwards_custom_prompt_builder(tmp_path: Path) -> None:
+    functions_path, prompts_path, prompts = _write_inputs(tmp_path)
+    script = _greet_script("bob") + _greet_script("bob") + _ping_script()
+    backend = ScriptedLLM(script)
+    seen: list[str] = []
+
+    def builder(catalog: FunctionCatalog, prompt: str) -> str:
+        seen.append(prompt)
+        return f"CUSTOM {prompt}"
+
+    calls = run(
+        functions_path,
+        prompts_path,
+        model=LLMClient(backend=backend),
+        index=_pipeline_index(),
+        prompt_builder=builder,
+    )
+
+    assert seen == prompts
+    assert backend.encode_calls[0] == f"CUSTOM {prompts[0]}"
+    assert [call.name for call in calls] == ["fn_greet", "fn_greet", "fn_ping"]
 
 
 def test_run_wraps_middle_prompt_error_with_position_and_text(
