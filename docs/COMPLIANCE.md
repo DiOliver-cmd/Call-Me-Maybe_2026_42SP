@@ -218,4 +218,6 @@ README and the range in this audit.
 T11.1 audit complete. Runtime is accepted on the 20-core target; the 8-core
 result is a documented hardware caveat and **#103 is closed**. T11.2 cleanup is
 verified; the repository contains only tracked source, tests, inputs and docs.
+T11.3 repository finalization is complete with tag `v1.0.0`; submitting the
+repository URL in the 42 portal remains a manual author step.
 This audit does not claim the < 5 min target on 8 cores.
