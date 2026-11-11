@@ -433,7 +433,7 @@ deviation is recorded in [`experiments/accuracy.md`](experiments/accuracy.md).
 The suite is deterministic by default and does not download the model:
 
 ```bash
-make test       # 559 passed, 3 deselected, 1 xfailed
+make test       # 557 passed, 6 deselected, 1 xfailed
 make test-all   # includes the slow, model-backed tests
 make lint       # flake8 + mypy
 ```
@@ -451,7 +451,9 @@ make lint       # flake8 + mypy
 - **Error matrix** exercises `main(argv)` for every bad input and backend
   failure: exit 1, one `error: ...` line, no traceback.
 - **Slow tests** (marked `slow`) load the real model for end-to-end and
-  numerical checks; `make test` deselects them.
+  numerical checks; `make test` deselects them. `tests/test_integration.py`
+  runs the sum, greeting and reverse prompts through the CLI and validates the
+  written JSON, the catalog signature and the scalar types (about 85 s locally).
 - **Accuracy and performance** are reproduced by `experiments/accuracy.py`,
   `experiments/time_budget.py` and `experiments/profile_decode.py`, not by
   assertions on wall-clock time.
@@ -704,7 +706,7 @@ evidence in the issue and a README/diary update at the end of the session.
 | M6 — Pipeline | orchestration, validation, output | done |
 | M7 — CLI/Packaging | `python -m src`, Makefile | done |
 | M8 — Hardening | errors, performance, accuracy | done (T8.1–T8.5) |
-| M9 — Tests | unit, integration, metrics | in progress (T9.1 done) |
+| M9 — Tests | unit, integration, metrics | in progress (T9.1–T9.2 done) |
 | M10 — Docs/Defence | README, architecture, rehearsal | in progress |
 | M11 — Submission | audit, cleanup, delivery | planned |
 
