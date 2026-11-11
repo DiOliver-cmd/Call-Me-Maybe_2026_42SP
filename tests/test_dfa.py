@@ -174,6 +174,32 @@ def test_accept_state_is_accepting() -> None:
     assert DFA(state=DFAState.ACCEPT).is_accepting() is True
 
 
+def test_every_state_is_reachable_from_valid_calls() -> None:
+    """T9.1: every state in the table is entered by at least one valid call."""
+    samples = [
+        # Prompt and string-parameter escapes, including a Unicode escape.
+        r'{"prompt":"a\n\u00e9","name":"fn_text","parameters":{"text":"b\n\u00e9"}}',
+        # Number with sign, fraction and exponent.
+        '{"prompt":"n","name":"fn_num","parameters":{"value":-1.5e+2}}',
+        # Boolean literal.
+        '{"prompt":"b","name":"fn_flag","parameters":{"flag":true}}',
+        # Empty parameters object.
+        '{"prompt":"z","name":"fn_zero","parameters":{}}',
+        # Several parameters, including structural whitespace.
+        '{"prompt": "m", "name": "fn_multi", "parameters": '
+        '{"a": "x", "n": 2, "b": false}}',
+    ]
+
+    seen = {DFAState.START}
+    for text in samples:
+        dfa = DFA()
+        for char in text:
+            assert dfa.consume(char), (text, char, dfa.state)
+            seen.add(dfa.state)
+
+    assert seen == set(DFAState)
+
+
 def test_non_dfa_state_raises_clear_error() -> None:
     with pytest.raises(TypeError) as excinfo:
         DFA(state="ACCEPT")  # type: ignore[arg-type]
