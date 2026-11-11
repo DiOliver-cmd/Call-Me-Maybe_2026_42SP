@@ -396,6 +396,11 @@ decoding. The full run is the subject's exact command:
 | Peak RSS | 4.9 GB |
 | Fresh-machine download | ~40 s, total ~232 s, still < 300 s |
 
+The 180.24 s figure is the 20-core development machine. A T11.1 audit on an
+8-vCPU WSL host measured **329.37 s** (50.9 s model load, ~1.017 s/step), so the
+< 5 min target is not confirmed on that host; the blocker is tracked in #103 and
+the full audit is in [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md).
+
 The T8.3 profile measured the mask before the compact prompt: mask 8.128 s
 (13.2%) versus logits 53.581 s (86.7%) over two prompts. After the per-index
 cache, the mask fell to 3.929 s (7.0%, **-51.7%**) and logits dominate at 92.8%.
@@ -422,6 +427,10 @@ The six failures are all string slots:
 | `Replace all vowels ...` | `replacement = "*.*"` instead of `*` |
 | `Substitute 'cat' with 'dog' ...` | `source_string` includes a copied explanation |
 | `Replace every digit ...` | `regex = "#\\d+"`, `replacement = "#}}"` |
+
+A fresh T11.1 audit scored 11/16 (68.8%) arguments; the recorded run is 10/16
+(62.5%). Both are below 90%, the failure family is the same, and the deviation
+is unchanged.
 
 Three prompt variants that ask for "values only" (`values`, `minimal`, `roles`)
 all hit `MAX_TOKENS` on the long `Replace all numbers ...` prompt: the compact
@@ -532,9 +541,9 @@ JSON.
 | --- | --- | --- |
 | Valid JSON and schema-compliant output | **100%**, by construction | DFA + Pydantic; 17/17 calls |
 | Correct function ≥ 90% | **100%** (16/16 defined) | `experiments/accuracy.md` |
-| Correct arguments ≥ 90% | **62.5%** (10/16), justified deviation | `experiments/accuracy.md` |
-| Full run < 5 minutes | **180.24 s** | `experiments/benchmark.md` |
-| Pydantic validates all classes | yes | `src/schemas.py`; strict types, `extra="forbid"` |
+| Correct arguments ≥ 90% | **62.5%** (10/16 recorded; 68.8% audit), justified deviation | `experiments/accuracy.md`; [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md) |
+| Full run < 5 minutes | **180.24 s** on 20-core; **329.37 s** on 8-core audit — at risk | `experiments/benchmark.md`; [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md); #103 |
+| Pydantic validates all input/output models | yes | `src/schemas.py`; strict types, `extra="forbid"`; internal algorithm types are dataclasses |
 | No guided-generation library | yes | no `outlines`/`vLLM`/`guidance`/`dspy` in `src/` |
 | No `torch`/`transformers` in application code | yes | `src/` imports neither; `torch` is pinned only as the SDK CPU runtime backend |
 | Public `llm_sdk` API only | yes | single boundary in `src/llm_client.py` |
@@ -546,9 +555,13 @@ JSON.
 | Live catalog modification | yes | data-driven prompt, DFA and validation |
 | Robust errors, no traceback | yes | `error: ...` + exit 1; error matrix tests |
 
-The argument-extraction target is the one unmet mandatory metric. It is reported
-explicitly rather than masked; the project does not add a keyword or regex
-post-processing step to inflate the number.
+The argument-extraction target is the one unmet accuracy metric on the recorded
+output; the runtime is hardware-sensitive and is at risk on 8 cores. Both are
+reported explicitly rather than masked, and the project does not add a keyword
+or regex post-processing step to inflate the number. The full audit, with
+commands and per-requirement evidence, is in
+[`docs/COMPLIANCE.md`](docs/COMPLIANCE.md); the runtime blocker is tracked in
+#103.
 
 ---
 
@@ -721,7 +734,7 @@ evidence in the issue and a README/diary update at the end of the session.
 | M8 — Hardening | errors, performance, accuracy | done (T8.1–T8.5) |
 | M9 — Tests | unit, integration, metrics | done (T9.1–T9.4) |
 | M10 — Docs/Defence | README, architecture, rehearsal | done (T10.1–T10.4) |
-| M11 — Submission | audit, cleanup, delivery | planned |
+| M11 — Submission | audit, cleanup, delivery | in progress (T11.1 audit; blocker #103) |
 
 ---
 
