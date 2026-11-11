@@ -232,4 +232,3 @@ model. The slow tests are explicitly marked and excluded by
 5. `src/prompt.py:build_template` / `build_prompt` — what is injected vs. generated.
 6. `tests/test_dfa.py`, `tests/test_decoder.py`, `tests/test_edge_cases.py` — the cases that justify the design.
 7. `experiments/accuracy.md`, `experiments/report.md`, `experiments/benchmark.md` — the measured numbers.
-8. `docs/DEFENSE.md` — the 10-minute script, likely questions and live drills.
