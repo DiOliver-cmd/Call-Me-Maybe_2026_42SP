@@ -715,7 +715,7 @@ evidence in the issue and a README/diary update at the end of the session.
 | M6 — Pipeline | orchestration, validation, output | done |
 | M7 — CLI/Packaging | `python -m src`, Makefile | done |
 | M8 — Hardening | errors, performance, accuracy | done (T8.1–T8.5) |
-| M9 — Tests | unit, integration, metrics | in progress (T9.1–T9.4 done) |
+| M9 — Tests | unit, integration, metrics | done (T9.1–T9.4) |
 | M10 — Docs/Defence | README, architecture, rehearsal | in progress |
 | M11 — Submission | audit, cleanup, delivery | planned |
 
