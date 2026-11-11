@@ -433,14 +433,15 @@ deviation is recorded in [`experiments/accuracy.md`](experiments/accuracy.md).
 The suite is deterministic by default and does not download the model:
 
 ```bash
-make test       # 537 passed, 3 deselected, 1 xfailed
+make test       # 559 passed, 3 deselected, 1 xfailed
 make test-all   # includes the slow, model-backed tests
 make lint       # flake8 + mypy
 ```
 
-- **Unit tests** cover the DFA (valid, invalid, boundary and multi-character
-  tokens), the mask, logit sanitization, argmax, EOS, the prompt/template and the
-  schema/loaders.
+- **Unit tests** cover the DFA (every state, valid/invalid/boundary transitions
+  and multi-character tokens), the mask, logit sanitization, argmax, EOS, the
+  prompt/template and the schema/loaders. `tests/test_validation.py` adds the
+  catalog/type/extra-key matrix and `validate_call` error precedence.
 - **Fakes** (`tests/fakes.py`) provide `FakeLLM` and `ScriptedLLM`. The scripted
   backend plays a fixed token sequence, records every call and can inject a
   high-logit invalid token (`distractors`), so masking is tested without a model.
@@ -703,7 +704,7 @@ evidence in the issue and a README/diary update at the end of the session.
 | M6 — Pipeline | orchestration, validation, output | done |
 | M7 — CLI/Packaging | `python -m src`, Makefile | done |
 | M8 — Hardening | errors, performance, accuracy | done (T8.1–T8.5) |
-| M9 — Tests | unit, integration, metrics | planned |
+| M9 — Tests | unit, integration, metrics | in progress (T9.1 done) |
 | M10 — Docs/Defence | README, architecture, rehearsal | in progress |
 | M11 — Submission | audit, cleanup, delivery | planned |
 
