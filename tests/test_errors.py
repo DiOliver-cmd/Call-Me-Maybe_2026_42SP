@@ -432,6 +432,7 @@ def test_backend_failure_via_main_exits_one_without_traceback(
     assert not output.exists()
 
 
+@pytest.mark.slow
 def test_lazy_model_load_failure_is_a_model_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -450,6 +451,7 @@ def test_lazy_model_load_failure_is_a_model_error(
     assert isinstance(excinfo.value.__cause__, RuntimeError)
 
 
+@pytest.mark.slow
 def test_lazy_model_load_failure_via_main_exits_one_without_traceback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
