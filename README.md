@@ -736,7 +736,7 @@ evidence in the issue and a README/diary update at the end of the session.
 | M8 — Hardening | errors, performance, accuracy | done (T8.1–T8.5) |
 | M9 — Tests | unit, integration, metrics | done (T9.1–T9.4) |
 | M10 — Docs/Defence | README, architecture, rehearsal | done (T10.1–T10.4) |
-| M11 — Submission | audit, cleanup, delivery | in progress (T11.1 done; T11.2 cleanup) |
+| M11 — Submission | audit, cleanup, delivery | in progress (T11.1/T11.2 done; T11.3 delivery) |
 
 ---
 

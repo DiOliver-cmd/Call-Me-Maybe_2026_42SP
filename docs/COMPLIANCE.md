@@ -196,8 +196,26 @@ README and the range in this audit.
 
 ---
 
+## Final cleanup (T11.2)
+
+- `make clean`: exit 0. Only ignored artifacts remain: `.cache/`, `.venv/`,
+  `GUIAS/`, `experiments/baseline_outputs.json`,
+  `experiments/time_budget_report.json`.
+- `git status --short`: empty. `git ls-files data/output`: empty. `llm_sdk`:
+  3 tracked files.
+- Required paths present: `src/`, `llm_sdk/`, `data/input/`, `pyproject.toml`,
+  `uv.lock`, `README.md`, `Makefile`, `.gitignore`.
+- No tracked `/mnt/c/Users/...` or `/home/<user>/...` absolute paths. The
+  secret-like grep only matched code identifiers (`token`) and README
+  pseudocode, not credentials.
+- `make test`: **580 passed, 7 deselected, 1 xfailed in 6.87 s**.
+- `make lint`: **46 source files, no issues**.
+
+---
+
 ## Status
 
 T11.1 audit complete. Runtime is accepted on the 20-core target; the 8-core
-result is a documented hardware caveat and **#103 is closed**. This audit does
-not claim the < 5 min target on 8 cores.
+result is a documented hardware caveat and **#103 is closed**. T11.2 cleanup is
+verified; the repository contains only tracked source, tests, inputs and docs.
+This audit does not claim the < 5 min target on 8 cores.
