@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from typing import Any, Literal
+
+from pydantic.dataclasses import dataclass
 
 from src.dfa import DFA
 from src.llm_client import LLMClient

@@ -132,7 +132,7 @@ def _expected_sum_call(prompt: str) -> FunctionCall:
     return FunctionCall(
         prompt=prompt,
         name="fn_add_numbers",
-        parameters={"a": 2, "b": 3},
+        parameters={"a": 2.0, "b": 3.0},
     )
 
 
@@ -144,9 +144,9 @@ def _check_sum_call(call: FunctionCall, prompt: str) -> None:
             f"got {call.model_dump(mode='json')}"
         )
     for name, value in call.parameters.items():
-        if type(value) is not int:
+        if type(value) is not float:
             raise RuntimeError(
-                f"parameter {name!r} must be int, got {type(value).__name__}"
+                f"parameter {name!r} must be float, got {type(value).__name__}"
             )
 
 

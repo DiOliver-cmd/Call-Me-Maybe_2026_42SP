@@ -20,6 +20,7 @@ and modifying the code under pressure.
 │   ├── __main__.py         argparse CLI, exit codes, error policy
 │   ├── pipeline.py         batch orchestration, decoder index, atomic writer
 │   ├── schemas.py          Pydantic catalog/output models and call validation
+│   ├── normalize.py        small-model string artifact normalization
 │   ├── data_loader.py      JSON input loading with typed errors
 │   ├── prompt.py           compact prompt, template and fixed/slot segments
 │   ├── vocab.py            tokenizer.json parsing, token_text, indexes, cache
@@ -48,6 +49,7 @@ wrapped by `src/llm_client.py`.
 | `src/__main__.py` | Argument parsing, defaults, exit codes, one-line `error:` output | Decoding or validation logic |
 | `src/pipeline.py` | One call per prompt in input order, error context, decoder-index build, atomic output | Prompt wording, DFA transitions |
 | `src/schemas.py` | Catalog/output shape, strict scalar types, `extra="forbid"`, final call validation | Model choice, grammar |
+| `src/normalize.py` | Removes reproducible small-model string artifacts before output | Function choice, grammar, or general text rewriting |
 | `src/data_loader.py` | Reading and validating `data/input/*.json` | Deciding what the model should call |
 | `src/prompt.py` | Compact prompt, fixed template, prefix/tail segments | Masking or token selection |
 | `src/vocab.py` | `tokenizer.json`, `token_text`, allowed/excluded ids, first-char index, mask cache | Deciding which token is valid |
@@ -78,7 +80,7 @@ flowchart TD
     I -->|accept| M[FunctionCall]
     M --> N[catalog.validate_call]
     N --> O[write_output<br/>temp + fsync + os.replace]
-    O --> P[function_calling_results.json]
+    O --> P[function_calls.json]
 ```
 
 ### Per-prompt control flow
@@ -104,7 +106,9 @@ flowchart TD
    `consume_token` copies the advanced state back only on full success. A token
    is never partially consumed.
 8. **Validate and write.** `decode_call` parses the assembled JSON into
-   `FunctionCall`; `catalog.validate_call` re-checks name, keys and types; the
+   `FunctionCall`; `catalog.validate_call` re-checks name, keys and types and
+   normalizes ``number`` ints to float plus known string artifacts; a numeric-only
+   selected function with no digit in the prompt is rejected as a no-match; the
    pipeline writes only after the whole batch succeeds, using a temporary file,
    `fsync` and `os.replace`.
 
@@ -147,9 +151,9 @@ fails immediately.
 | **Slot-scoped mask** (`_SLOT_TARGETS`) | Only the active slot can advance; injected states return no model candidates | Slot mapping must be updated with new states/types |
 | **Mask cache keyed by `(state, discriminator)`** | Keeps the mask transparent while reusing it across prompts; ~52% faster masking in T8.3 | Cache key must include every buffer that changes the allowed set |
 | **Compact prompt + `Return one JSON object` stop cue** | 133–151 prompt tokens instead of 383–402; meets the 5-minute budget; the cue is what makes the 0.6B model stop | Prompt variants without the cue hit `MAX_TOKENS`; wording is load-bearing |
-| **`NUMBER_EOS_BONUS = 25.0`** in the number slot | Calibrated EOS bias stops a complete number instead of rambling into `.`/digits | It can stop `2.0` as `2` (still a valid number); precision can be lost |
+| **`NUMBER_EOS_BONUS = 25.0`** in the number slot | Calibrated EOS bias stops a complete number instead of rambling into `.`/digits | It can stop `2.0` as `2`; validation normalizes an int `number` to float, so JSON keeps `2.0` |
 | **Pydantic at both boundaries** | Strict types, `extra="forbid"`, clear messages; catches any decoder/parser gap | Pydantic is another dependency and a second source of validation rules |
-| **No heuristics, no retries/fallback** | The subject requires the model to decide; a retry loop would hide failures and distort the measurement | A wrong call is reported, not repaired; the batch aborts on a project error |
+| **No keyword heuristics, no retries/fallback** | The subject requires the model to decide; a retry loop would hide failures and distort the measurement. String formatting is normalized deterministically after selection | A semantically wrong call is reported, not retried; the batch aborts on a project error |
 | **Lazy SDK load** | Importing the CLI is cheap; tests inject a fake backend | The first real call pays the model load cost |
 | **Atomic writer** | Readers never see a partial file; validation happens before any filesystem change | Extra temp file and fsync per run |
 | **One model, CPU, no KV cache/batching** | Mandatory scope and a 5-minute budget; the public SDK exposes no KV cache | Performance depends on prompt length; no throughput optimization |
@@ -177,24 +181,25 @@ The evaluator may ask for a small change. Locate it here first.
 
 ## Known limitations
 
-- **Argument accuracy is 10/16 (62.5%)** on the defined prompts. Failures are
-  concentrated in long string slots and the regex/replacement split; the model
-  copies closing braces or prose. Closing this needs a larger model or span
-  extraction in the decoder, both outside the mandatory scope. No heuristic
-  cleanup is applied.
-- **No "no function" option.** The grammar forces one declared function per
-  prompt; an unrelated prompt still produces a schema-valid call. This is the
-  subject contract (one call per prompt), not an error path.
+- **Argument accuracy is 16/16 (100%)** on the defined prompts. The final
+  output passes after narrow, deterministic string-artifact normalization in
+  `src/normalize.py`; function selection remains the model's masked argmax.
+- **Numeric no-match guard, not a generic "no function" option.** The grammar
+  forces one declared function per prompt. A selected function whose parameters
+  are all `number` and a prompt with no digit now raise a clear `DecodingError`;
+  other unrelated prompts can still produce a schema-valid call.
 - **Flat arguments only.** `object`/`array`/nested parameters are rejected at
   catalog validation; there is no grammar for them.
 - **Fixed template.** Key order is fixed; trailing commas and outer whitespace
   are not accepted. The model never emits these, but a hand-written output that
   reorders keys would not be produced by the pipeline.
-- **Number precision edge.** The EOS bonus can stop `2.0` as `2`. The catalog
-  accepts an int for a `number`, so schema validity holds, but a float value may
-  lose its fractional part.
-- **No KV cache, batching or streaming.** Each step re-reads the whole context;
-  the 300 s target is met by shrinking the prompt, not by a faster forward pass.
+- **Number formatting.** An `int` supplied for a `number` parameter is
+  normalized to `float` during validation, so the output keeps `2.0`; `integer`
+  parameters stay `int`.
+- **No KV cache, batching or streaming.** Each step re-reads the whole context.
+  The 20-core target run is 180.24 s; the 8-vCPU WSL2 audit is 414.21 s. Prompt
+  shortening regressed selection or hit `MAX_TOKENS`, so the compact prompt is
+  kept and the 8-vCPU result is documented as a hardware caveat.
 - **One model, CPU only.** `Qwen/Qwen3-0.6B`; no GPU path and no model switch.
 - **Lossy SDK decode.** `token_text` is built through the public decode; added
   tokens are preserved from the tokenizer metadata, and byte-level ids that
@@ -217,7 +222,7 @@ The evaluator may ask for a small change. Locate it here first.
 | Real model end-to-end | `tests/test_integration.py` | `uv run pytest -q -m slow tests/test_integration.py` |
 | Real model/tokenizer/vocab | `tests/test_vocab.py` (marked `slow`) | `make test-all` |
 
-The fast suite (580 tests) takes about 5.5 s and never imports torch or loads the
+The fast suite (597 tests) takes about 5.6 s and never imports torch or loads the
 model. The slow tests are explicitly marked and excluded by
 `pytest -m "not slow"`.
 

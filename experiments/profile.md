@@ -150,7 +150,7 @@ Command: `uv run python -m src` (default 17 prompts, `NUMBER_EOS_BONUS` on).
 
 - exit code: **0**
 - wall clock: **702 s** (11m42s), versus 16m54s-18m05s before the cache
-- output: 17 calls in `data/output/function_calling_results.json`
+- output: 17 calls in `data/output/function_calls.json`
 - remaining breakdown: the ~3.0 s CPU `logits` forward pass is ~93% of decode
   time; the mask is ~7% and mostly cache hits. The target of <5 minutes is not
   reached, and the remaining cost is the model forward pass, not Python mask

@@ -31,6 +31,7 @@ from pydantic import (
 )
 
 from src.errors import SchemaError
+from src.normalize import normalize_parameter_value
 
 # Strict JSON scalars. The strict variants keep the runtime type intact instead
 # of coercing: ``1`` stays ``int``, ``2.0`` stays ``float`` and ``True`` stays
@@ -138,14 +139,17 @@ class FunctionCatalog(BaseModel):
         declaration exactly (every declared parameter is required), and each
         value must have the declared type. ``bool`` never satisfies ``number``
         or ``integer`` because :func:`_value_matches_spec` uses strict type
-        identity.
+        identity. A declared ``number`` parameter given a Python ``int`` is
+        normalized to ``float`` in place, so the JSON output keeps the decimal
+        form (``2`` becomes ``2.0``).
 
         Raises:
             SchemaError: if the name is unknown, a parameter is missing or
                 unexpected, or a value has the wrong type.
 
         Returns:
-            The same ``call`` object, unchanged, so the pipeline can append it.
+            The same ``call`` object, with integer ``number`` values
+            normalized to ``float``, so the pipeline can append it.
         """
         try:
             function = self.by_name(call.name)
@@ -178,6 +182,12 @@ class FunctionCatalog(BaseModel):
                     f"function {function.name!r} parameter "
                     f"{parameter_name!r} must be {expected_label}, "
                     f"got {type(value).__name__}"
+                )
+            if spec.type == "number" and type(value) is int:
+                provided[parameter_name] = float(value)
+            elif spec.type == "string":
+                provided[parameter_name] = normalize_parameter_value(
+                    parameter_name, value
                 )
         return call
 
@@ -241,7 +251,9 @@ class FunctionCall(BaseModel):
         unexpected keys), and each value must match its declared type. T6.2
         wires this primitive into the pipeline so that a structurally valid
         :class:`FunctionCall` cannot be emitted with names or types that
-        disagree with the catalog.
+        disagree with the catalog. A declared ``number`` parameter given a
+        Python ``int`` is normalized to ``float`` in place, so the JSON output
+        keeps the decimal form (``2`` becomes ``2.0``).
 
         Raises:
             ValueError: if parameter keys differ from the declaration or a
@@ -249,7 +261,8 @@ class FunctionCall(BaseModel):
                 function, the parameter and the expected/actual types.
 
         Returns:
-            ``self`` on success, so calls can be chained.
+            ``self`` on success, with integer ``number`` values normalized to
+            ``float``, so calls can be chained.
         """
         declared = function.parameters
         provided = self.parameters
@@ -274,6 +287,10 @@ class FunctionCall(BaseModel):
                     f"parameter {key!r} of function {function.name!r} "
                     f"expects {expected_label}, got {type(value).__name__}"
                 )
+            if spec.type == "number" and type(value) is int:
+                provided[key] = float(value)
+            elif spec.type == "string":
+                provided[key] = normalize_parameter_value(key, value)
         return self
 
 

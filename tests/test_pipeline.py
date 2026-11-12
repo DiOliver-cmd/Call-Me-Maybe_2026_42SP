@@ -10,8 +10,13 @@ import pytest
 from src.decoder import NUMBER_EOS_BONUS
 from src.errors import DecodingError, SchemaError
 from src.llm_client import LLMClient
-from src.pipeline import build_decoder_index, run, write_output
-from src.schemas import FunctionCall, FunctionCatalog
+from src.pipeline import (
+    _ensure_numeric_arguments_available,
+    build_decoder_index,
+    run,
+    write_output,
+)
+from src.schemas import FunctionCall, FunctionCatalog, FunctionDefinition
 from src.vocab import TokenizerIndex
 from tests.fakes import ScriptedLLM
 
@@ -385,3 +390,47 @@ def test_output_directory_is_gitignored() -> None:
     ]
 
     assert "data/output/" in patterns
+
+
+def _numeric_function() -> FunctionDefinition:
+    return FunctionDefinition.model_validate(
+        {
+            "name": "fn_add",
+            "description": "Add two numbers.",
+            "parameters": {"a": {"type": "number"}, "b": {"type": "number"}},
+            "returns": {"type": "number"},
+        }
+    )
+
+
+def _string_function() -> FunctionDefinition:
+    return FunctionDefinition.model_validate(
+        {
+            "name": "fn_greet",
+            "description": "Greet someone.",
+            "parameters": {"name": {"type": "string"}},
+            "returns": {"type": "string"},
+        }
+    )
+
+
+def test_numeric_only_function_rejects_prompt_without_a_number() -> None:
+    with pytest.raises(DecodingError, match="requires numeric"):
+        _ensure_numeric_arguments_available(
+            _numeric_function(),
+            "What is the weather in Paris?",
+        )
+
+
+def test_numeric_only_function_accepts_prompt_with_a_digit() -> None:
+    _ensure_numeric_arguments_available(
+        _numeric_function(),
+        "What is the sum of 2 and 3?",
+    )
+
+
+def test_numeric_guard_ignores_non_numeric_function() -> None:
+    _ensure_numeric_arguments_available(
+        _string_function(),
+        "What is the weather in Paris?",
+    )

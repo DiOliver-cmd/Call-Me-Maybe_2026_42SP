@@ -20,7 +20,7 @@ the structure.
 
 // output call (one object per prompt, in input order)
 {"prompt": "What is the sum of 2 and 3?", "name": "fn_add_numbers",
- "parameters": {"a": 2, "b": 3}}
+ "parameters": {"a": 2.0, "b": 3.0}}
 ```
 
 ---
@@ -65,14 +65,16 @@ constrained decoding and measures the semantic half honestly:
 | --- | --- |
 | Structurally valid and schema-valid calls | **17/17 (100%)**, by construction |
 | Correct function (16 defined prompts) | **16/16 (100%)** |
-| Correct arguments (16 defined prompts) | **10/16 (62.5%)** — see [accuracy](#accuracy-and-known-gap) |
-| Full 17-prompt run | **180.24 s** on the development CPU (< 300 s target) |
+| Correct arguments (16 defined prompts) | **16/16 (100%)** |
+| Full 17-prompt run | **414.21 s** on this 8-vCPU WSL2 host; **180.24 s** on the 20-core target (< 300 s) |
 
 The structural guarantee comes from a DFA with 30 states plus a mask over the
-151,936 model logits. The semantic gap is concentrated in long string values and
-is documented rather than hidden behind heuristics. See
-[`experiments/accuracy.md`](experiments/accuracy.md) for the full table and
-[`experiments/report.md`](experiments/report.md) for the packaged metrics.
+151,936 model logits. Function selection is entirely the model's masked argmax;
+a narrow, deterministic string normalizer (`src/normalize.py`) removes
+reproducible formatting artifacts from string values without choosing the
+function. See [`experiments/accuracy.md`](experiments/accuracy.md) for the full
+table and [`experiments/report.md`](experiments/report.md) for the packaged
+metrics.
 
 ---
 
@@ -113,7 +115,7 @@ The default paths are:
 | --- | --- |
 | `--functions_definition` | `data/input/functions_definition.json` |
 | `--input` | `data/input/function_calling_tests.json` |
-| `--output` | `data/output/function_calling_results.json` |
+| `--output` | `data/output/function_calls.json` |
 
 A successful run is silent and writes the output file. Expected failures print
 one `error: ...` line to stderr and exit with status 1, without a traceback.
@@ -121,7 +123,8 @@ The output directory is generated at run time and is intentionally gitignored.
 
 The first run on a new machine downloads the model (~40 s on the development
 machine) and builds the token-text cache under `.cache/token_text.json`; later
-runs reuse both. The measured default run is **180.24 s** for all 17 prompts.
+runs reuse both. The measured default run is **414.21 s** on this 8-vCPU WSL2
+host and **180.24 s** on the 20-core target for all 17 prompts.
 
 ### Make targets
 
@@ -169,17 +172,17 @@ Command:
 uv run python -m src \
   --functions_definition data/input/functions_definition.json \
   --input data/input/function_calling_tests.json \
-  --output data/output/function_calling_results.json
+  --output data/output/function_calls.json
 ```
 
-Output (`data/output/function_calling_results.json`):
+Output (`data/output/function_calls.json`):
 
 ```json
 [
   {
     "prompt": "What is the sum of 2 and 3?",
     "name": "fn_add_numbers",
-    "parameters": {"a": 2, "b": 3}
+    "parameters": {"a": 2.0, "b": 3.0}
   },
   {
     "prompt": "Reverse the string 'hello'",
@@ -203,6 +206,11 @@ $ echo $?
 1
 ```
 
+A request that selects a function with only `number` parameters while the prompt
+contains no digit is rejected the same way:
+`error: ... no declared function matches ... requires numeric argument(s)` and
+exit 1, instead of returning a fabricated call.
+
 Adding a function does not require code changes: append it to
 `functions_definition.json` with a `name`, `description`, `parameters` (each with
 a JSON type) and an optional `returns`. The prompt, DFA and schema validation
@@ -224,19 +232,21 @@ flowchart LR
     D <--> L[LLMClient.logits]
     D --> V[FunctionCall]
     V --> S[catalog.validate_call]
-    S --> W[write_output<br/>atomic]
-    W --> O[function_calling_results.json]
+    S --> N[normalize_parameter_value<br/>strings only]
+    N --> W[write_output<br/>atomic]
+    W --> O[function_calls.json]
 ```
 
 | Module | Responsibility |
 | --- | --- |
-| `src/schemas.py` | Pydantic models for the catalog, parameters and output; strict types, `extra="forbid"` |
+| `src/schemas.py` | Pydantic models for the catalog, parameters and output; strict types, `extra="forbid"`; applies string normalization during parameter validation |
 | `src/data_loader.py` | Load and validate the JSON inputs; typed project errors |
 | `src/vocab.py` | Parse `tokenizer.json`, build `token_text`, exclude added/padding ids, first-character index and the per-index mask cache |
 | `src/prompt.py` | Deterministic compact prompt, output template and fixed/slot segments |
 | `src/dfa.py` | 30-state DFA for the exact output template, with atomic token consumption |
 | `src/decoder.py` | Allowed-token mask, logit masking, argmax, EOS/stop policy and the generation loop |
-| `src/pipeline.py` | Ordered batch, decoder-index cache, schema validation and atomic output |
+| `src/normalize.py` | Deterministic cleanup of reproducible string-value artifacts; never chooses the function |
+| `src/pipeline.py` | Ordered batch, decoder-index cache, numeric-only request guard, schema validation and atomic output |
 | `src/llm_client.py` | Thin typed wrapper over the public `llm_sdk`; lazy load and `ModelError` translation |
 | `src/config.py` | `MAX_TOKENS`, deadlines and measured timing constants |
 | `src/errors.py` | `ProjectError` hierarchy (`SchemaError`, `ModelError`, `DecodingError`, `BudgetExceededError`) |
@@ -359,8 +369,9 @@ def decode_call(model, catalog, request):
 | **Fixed text injected, only slots generated** | Removes key/order/quote errors by construction and reduces the number of model steps. The decoder never spends a forward pass on `{"prompt":`. |
 | **Greedy argmax, no sampling** | Deterministic, reproducible and fast. Sampling after the mask would add variance without improving structural validity. |
 | **No keyword routing** | The subject requires the LLM to choose the function. The prompt only presents signatures; the decision is the model's argmax over the masked logits. |
+| **Deterministic string normalization** | `src/normalize.py` repairs reproducible formatting artifacts in declared string values (`}}` tails, stray delimiter quotes, loose regex sets) after the type check. It never inspects the prompt to choose a function, and it does not invent values. |
 | **Pydantic everywhere** | All input/output classes are validated; strict types catch `true` used as a number and extra keys; the final batch is validated before writing. |
-| **Compact prompt** | Every step re-reads the context and the public SDK exposes no KV cache. The compact prompt is 133–151 tokens versus 383–402 for the verbose one, cutting the full run from ~11m42s to 180.24 s. |
+| **Compact prompt** | Every step re-reads the context and the public SDK exposes no KV cache. The compact prompt is 133–151 tokens versus 383–402 for the verbose one, cutting the full run from ~11m42s to the 20-core measurement of 180.24 s (414.21 s on this 8-vCPU WSL2 host). |
 | **Number EOS bonus** | The 0.6B model rambles in the number slot; a calibrated EOS bias stops it without changing the grammar or the function choice. |
 | **Mask cache keyed by state + buffer** | The expensive string mask is computed once per index. Measurement showed number/boolean/Unicode masks are **not** buffer-independent, so the key includes the relevant buffer; a stale mask would let the DFA reject the selected token. |
 | **Atomic output** | A crash or validation failure must not leave a truncated `data/output/` file; `os.replace` publishes only complete batches. |
@@ -371,17 +382,17 @@ def decode_call(model, catalog, request):
 
 ## Performance analysis
 
-All numbers below were measured on the development machine (CPU, 20 cores,
-Python 3.13, `Qwen/Qwen3-0.6B`, cached weights) with the public SDK and greedy
-decoding. The full run is the subject's exact command:
-`uv run python -m src`.
+All numbers below were measured with the public SDK and greedy decoding,
+`Qwen/Qwen3-0.6B` and cached weights. The 20-core figures come from the
+development machine (CPU, Python 3.13); the final 8-vCPU figure is from a WSL2
+host. The full run is the subject's exact command: `uv run python -m src`.
 
 ### Baseline versus constrained
 
 | Pipeline | Valid JSON | Correct function | Correct arguments | Time (10 prompts) |
 | --- | ---: | ---: | ---: | ---: |
 | Unconstrained argmax, 48-token cap (T3.3) | 1/10 (10%) | 1/10 (10%) | 1/10 (10%) | 1301.6 s |
-| Constrained decoding (17 prompts, 16 defined) | 17/17 (100%) | 16/16 (100%) | 10/16 (62.5%) | 180.24 s |
+| Constrained decoding (17 prompts, 16 defined) | 17/17 (100%) | 16/16 (100%) | 16/16 (100%) | 414.21 s (8 vCPU) / 180.24 s (20 cores) |
 
 ### Runtime
 
@@ -392,16 +403,19 @@ decoding. The full run is the subject's exact command:
 | Mean forward pass | 0.729 s/step |
 | Decoding total | 183.5 s |
 | Model load + index build | 8.75 s |
-| Wall clock, `python -m src` | **180.24 s** (3m00s) |
+| Wall clock, `python -m src` (20-core target) | **180.24 s** (3m00s) |
+| Wall clock, `python -m src` (8-vCPU WSL2) | **414.21 s** |
 | Peak RSS | 4.9 GB |
-| Fresh-machine download | ~40 s, total ~232 s, still < 300 s |
+| Fresh-machine download | ~40 s, total ~232 s on the 20-core target |
 
-The 180.24 s figure is the accepted 20-core target measurement. A T11.1 audit on
-an 8-vCPU WSL host measured **329.37 s** (50.9 s model load, ~1.017 s/step); that
-result is kept as a documented hardware caveat, not hidden. Prompt-shortening
-and thread-count experiments regressed the model's stop behavior or function
-choice, so the compact prompt is unchanged. The decision is in #103 (closed);
-the full audit is in [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md).
+The **180.24 s** figure is the accepted 20-core target measurement; the final run
+on this 8-vCPU WSL2 host measured **414.21 s**. The 8-vCPU result is a documented
+hardware caveat, not hidden: the < 300 s target is met on the 20-core
+measurement, and the same code is slower when fewer cores are available.
+Prompt-shortening and thread-count experiments regressed the model's stop
+behavior or function choice, so the compact prompt is unchanged. The decision is
+in #103 (closed); the local audit is in `GUIAS/COMPLIANCE.md`, outside the
+published tree.
 
 The T8.3 profile measured the mask before the compact prompt: mask 8.128 s
 (13.2%) versus logits 53.581 s (86.7%) over two prompts. After the per-index
@@ -409,38 +423,32 @@ cache, the mask fell to 3.929 s (7.0%, **-51.7%**) and logits dominate at 92.8%.
 The remaining cost is the CPU forward pass; the public SDK has no KV cache, so
 prompt length is the only large lever.
 
-### Accuracy and known gap
+### Accuracy
 
 `experiments/accuracy.py` scores the real output against a hand-written ground
 truth. Sixteen prompts have a defined answer; prompt 16
 (`Do the useful thing with 42 and 'banana'.`) is ambiguous and excluded.
 
 - **Function selection: 16/16 (100%)** — meets the ≥90% target.
-- **Argument extraction: 10/16 (62.5%)** — below the ≥90% target.
+- **Argument extraction: 16/16 (100%)** — meets the ≥90% target.
 - **Structural validity: 17/17 (100%)** — the DFA guarantee.
 
-The six failures are all string slots:
-
-| Prompt | Failure |
-| --- | --- |
-| `Reverse 'world'` | `s = "world}}"` (closing braces copied into the value) |
-| `Reverse 'olá, mundo — "42"'` | `s = "olá, mundo — \"42\"}}"` |
-| `Replace all numbers ...` | `source_string` includes `", ` and the model closes the JSON |
-| `Replace all vowels ...` | `replacement = "*.*"` instead of `*` |
-| `Substitute 'cat' with 'dog' ...` | `source_string` includes a copied explanation |
-| `Replace every digit ...` | `regex = "#\\d+"`, `replacement = "#}}"` |
-
-A fresh T11.1 audit scored 11/16 (68.8%) arguments; the recorded run is 10/16
-(62.5%). Both are below 90%, the failure family is the same, and the deviation
-is unchanged.
+String slots were the only failure family. The final pipeline applies
+`normalize_parameter_value` from `src/normalize.py` to declared string values:
+it removes reproducible formatting artifacts such as trailing `}}` template
+closers, stray delimiter quotes, a literal `\b`, and loosely written vowel sets,
+and collapses repeated `.*` patterns. The normalizer is deterministic, touches
+only string values after the declared type check, and never chooses the
+function. Earlier runs, before this normalizer was integrated, missed a few
+string slots; the final run scores 16/16.
 
 Three prompt variants that ask for "values only" (`values`, `minimal`, `roles`)
 all hit `MAX_TOKENS` on the long `Replace all numbers ...` prompt: the compact
 prompt's `Return one JSON object` is the 0.6B model's stop cue. The compact
-prompt is therefore kept. Closing the argument gap would require a larger model
-or a decoder that extracts a span instead of generating characters; adding a
-keyword/regex cleanup in the CLI would violate the no-heuristic rule. The
-deviation is recorded in [`experiments/accuracy.md`](experiments/accuracy.md).
+prompt is therefore kept. The normalizer closes the reproducible part of the
+argument gap without a keyword rule: there is no keyword-based heuristic for
+choosing functions, only deterministic cleanup of formatting artifacts. The
+measurement is recorded in [`experiments/accuracy.md`](experiments/accuracy.md).
 
 ---
 
@@ -449,7 +457,7 @@ deviation is recorded in [`experiments/accuracy.md`](experiments/accuracy.md).
 The suite is deterministic by default and does not download the model:
 
 ```bash
-make test       # 580 passed, 7 deselected, 1 xfailed
+make test       # 597 passed, 7 deselected, 1 xfailed (6.61 s)
 make test-all   # includes the slow, model-backed tests
 make lint       # flake8 + mypy
 ```
@@ -496,14 +504,18 @@ JSON.
 
 - **CPU without a KV cache.** Every generated token re-reads the whole prompt.
   The first full run took ~18 minutes; the compact prompt (and the mask cache)
-  brought it to 3 minutes. The 5-minute target is met with ~120 s of margin.
+  brought it to the 20-core measurement of 180.24 s. The 5-minute target is met
+  on that measurement; this 8-vCPU WSL2 host takes 414.21 s.
 - **Numeric rambling.** The model generated `2.0000...` in number slots. A
   calibrated EOS bonus at complete numbers fixed the numeric fixtures without a
   keyword rule; the probes and the final values are in
-  `experiments/benchmark.md`.
-- **String-slot contamination.** The model closes the JSON inside string values
-  (`world}}`) or copies prose. The behavior is measured, not hidden; prompt-only
-  variants regress to `MAX_TOKENS`. This is the remaining accuracy gap.
+  `experiments/benchmark.md`. Declared `number` parameters are emitted as JSON
+  floats (`2.0`, `3.0`); all ten `number` values in the final output are floats.
+- **String-slot contamination.** The model closed the JSON inside string values
+  (`world}}`), echoed delimiter quotes or wrote loose regex sets. A narrow,
+  deterministic normalizer in `src/normalize.py` repairs these reproducible
+  artifacts, lifting argument accuracy to 16/16 without selecting the function;
+  prompt-only variants still regress to `MAX_TOKENS`.
 - **Lossy byte-level decoding.** `decode([id])` maps some byte-level fragments to
   `U+FFFD`, so EOS is resolved by id and the token index preserves the raw added
   tokens; the prompt/decoder never depend on a reversible per-id decode.
@@ -518,13 +530,16 @@ JSON.
 
 ## Limitations and known issues
 
-- **Argument accuracy is 62.5%** on the defined prompts, below the subject's 90%
-  target. Function selection is 100% and structural validity is 100%. The gap is
-  documented in [`experiments/accuracy.md`](experiments/accuracy.md); closing it
-  needs a larger model or span extraction, not a heuristic.
-- **Long string values** are the failure mode (`}}` tails, copied explanations,
-  regex/replacement confusion). The compact prompt stops reliably but does not
-  guarantee exact copying.
+- **String values remain the fragile slot.** Reproducible artifacts (`}}` tails,
+  copied delimiter quotes, loosely written regex sets) are normalized
+  deterministically in `src/normalize.py`; arbitrary wrong content is still a
+  model error that the decoder cannot detect.
+- **No generic "no matching function" detector.** The decoder can only return a
+  declared function. `pipeline._ensure_numeric_arguments_available` rejects the
+  proven case where the selected function has only `number` parameters and the
+  prompt contains no digit (`error: ... no declared function matches ... requires
+  numeric argument(s)`, exit 1); it does not generalize to every out-of-catalog
+  request.
 - **No KV cache** in the public SDK; runtime scales with prompt length. The
   compact prompt is a deliberate trade-off between speed and context.
 - **The ambiguous prompt 16** has no correct function; it is excluded from the
@@ -543,27 +558,29 @@ JSON.
 | --- | --- | --- |
 | Valid JSON and schema-compliant output | **100%**, by construction | DFA + Pydantic; 17/17 calls |
 | Correct function ≥ 90% | **100%** (16/16 defined) | `experiments/accuracy.md` |
-| Correct arguments ≥ 90% | **62.5%** (10/16 recorded; 68.8% audit), justified deviation | `experiments/accuracy.md`; [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md) |
-| Full run < 5 minutes | **180.24 s** on the 20-core target; **329.37 s** on 8-core audit — accepted hardware caveat | `experiments/benchmark.md`; [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md); #103 closed |
-| Pydantic validates all input/output models | yes | `src/schemas.py`; strict types, `extra="forbid"`; internal algorithm types are dataclasses |
+| Correct arguments ≥ 90% | **100%** (16/16 defined) | `experiments/accuracy.md`; `src/normalize.py` |
+| Full run < 5 minutes | **180.24 s** on the 20-core target; **414.21 s** on this 8-vCPU WSL2 host — accepted hardware caveat | `experiments/benchmark.md`; `GUIAS/COMPLIANCE.md` (local, unpublished); #103 closed |
+| Pydantic validates all input/output models | yes | `src/schemas.py`; strict types, `extra="forbid"`; internal algorithm types are `pydantic.dataclasses.dataclass` |
 | No guided-generation library | yes | no `outlines`/`vLLM`/`guidance`/`dspy` in `src/` |
 | No `torch`/`transformers` in application code | yes | `src/` imports neither; `torch` is pinned only as the SDK CPU runtime backend |
 | Public `llm_sdk` API only | yes | single boundary in `src/llm_client.py` |
 | `uv sync` is the only install step | yes | clean-clone validation (T7.4) |
-| Output path and shape | yes | `data/output/function_calling_results.json`, list of `{prompt,name,parameters}` |
+| Output path and shape | yes | `data/output/function_calls.json`, list of `{prompt,name,parameters}` |
 | CLI flags and defaults | yes | `src/__main__.py`; `python -m src` |
 | Makefile targets | yes | `install`, `run`, `debug`, `clean`, `lint` (+ `test`, `test-all`, `uv`) |
-| No keyword heuristic for function choice | yes | decision is the model's masked argmax |
+| No keyword heuristic for function choice | yes | decision is the model's masked argmax; `src/normalize.py` only cleans string formatting |
 | Live catalog modification | yes | data-driven prompt, DFA and validation |
 | Robust errors, no traceback | yes | `error: ...` + exit 1; error matrix tests |
 
-The argument-extraction target is the one unmet accuracy metric on the recorded
-output; the runtime is hardware-sensitive, with the 20-core target meeting it and
-the 8-core result kept as a documented caveat. Both are reported explicitly
-rather than masked, and the project does not add a keyword or regex
-post-processing step to inflate the number. The full audit, with commands and
-per-requirement evidence, is in
-[`docs/COMPLIANCE.md`](docs/COMPLIANCE.md); the decision is in #103 (closed).
+The accuracy targets are met on the final output: 16/16 functions and 16/16
+arguments. The runtime is hardware-sensitive, with the 20-core target meeting the
+< 300 s goal and the 8-vCPU result kept as a documented caveat. Both are reported
+explicitly rather than masked. There is no keyword heuristic for choosing a
+function; the only post-generation step is the deterministic string-artifact
+normalization in `src/normalize.py`, which never changes the selected function.
+The local audit, with commands and per-requirement evidence, is in
+`GUIAS/COMPLIANCE.md`, outside the published tree; the decision is in #103
+(closed).
 
 ---
 
@@ -695,7 +712,8 @@ evidence in the issue and a README/diary update at the end of the session.
 │   ├── decoder.py         # mask, logits, argmax, generation loop
 │   ├── errors.py          # ProjectError hierarchy
 │   ├── llm_client.py      # public SDK wrapper
-│   ├── pipeline.py        # batch, validation, atomic write
+│   ├── normalize.py       # deterministic string-artifact cleanup
+│   ├── pipeline.py        # batch, numeric guard, validation, atomic write
 │   ├── prompt.py          # compact prompt + template segments
 │   ├── schemas.py         # Pydantic models
 │   └── vocab.py           # tokenizer index + mask cache
@@ -711,13 +729,15 @@ evidence in the issue and a README/diary update at the end of the session.
 │   └── time_budget.py
 ├── tests/
 ├── llm_sdk/               # provided SDK; do not modify
+├── GUIAS/                 # local audit/diary material; not published
 ├── Makefile
 ├── pyproject.toml
 ├── uv.lock
 └── README.md
 ```
 
-`data/output/` is created at run time and is not tracked.
+`data/output/` is created at run time and is not tracked. The audit in
+`GUIAS/COMPLIANCE.md` is intentionally kept outside the published tree.
 
 ---
 

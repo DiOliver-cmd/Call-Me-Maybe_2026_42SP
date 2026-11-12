@@ -130,7 +130,7 @@ probe that ran the verbose prompt on this machine for two prompts (20.25 s and
 Production command, same machine, immediately after: `uv run python -m src`
 (the subject's exact invocation, default flags) finished in **180.24 s** with
 exit code 0 and wrote all 17 calls to
-`data/output/function_calling_results.json` (`MAXRSS` 4.9 GB). The 12 s
+`data/output/function_calls.json` (`MAXRSS` 4.9 GB). The 12 s
 difference against the harness is the instrumentation overhead of
 `experiments/time_budget.py`.
 

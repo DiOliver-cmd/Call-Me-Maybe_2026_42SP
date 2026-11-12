@@ -22,7 +22,12 @@ from src.decoder import NUMBER_EOS_BONUS, decode_call
 from src.errors import DecodingError, ModelError, ProjectError, SchemaError
 from src.llm_client import LLMClient
 from src.prompt import build_prompt
-from src.schemas import FunctionCall, FunctionCallBatch, FunctionCatalog
+from src.schemas import (
+    FunctionCall,
+    FunctionCallBatch,
+    FunctionCatalog,
+    FunctionDefinition,
+)
 from src.vocab import (
     TokenizerIndex,
     build_token_index,
@@ -40,6 +45,31 @@ __all__ = [
 ]
 
 DEFAULT_TOKEN_TEXT_CACHE = Path(".cache/token_text.json")
+
+
+def _ensure_numeric_arguments_available(
+    function: FunctionDefinition,
+    prompt: str,
+) -> None:
+    """Reject a numeric-only function when the request has no number.
+
+    The constrained decoder can only choose a declared function, so a request
+    outside the catalog (for example, asking for the weather) necessarily
+    selects some function. For the common case where the selected function has
+    only ``number`` parameters and the prompt contains no digit, we can prove
+    that the request cannot be satisfied and raise instead of returning a
+    fabricated call. The guard is deliberately data-driven: it inspects the
+    selected signature and the prompt, not hard-coded keywords.
+    """
+    parameters = function.parameters
+    numeric_only = bool(parameters) and all(
+        spec.type == "number" for spec in parameters.values()
+    )
+    if numeric_only and not any(char.isdigit() for char in prompt):
+        raise DecodingError(
+            f"no declared function matches {prompt!r}: {function.name!r} "
+            "requires numeric argument(s), but the prompt contains no number"
+        )
 
 
 def build_decoder_index(
@@ -124,7 +154,12 @@ def run(
                 number_eos_bonus=NUMBER_EOS_BONUS,
                 prompt_builder=prompt_builder,
             )
-            calls.append(catalog.validate_call(call))
+            validated = catalog.validate_call(call)
+            _ensure_numeric_arguments_available(
+                catalog.by_name(validated.name),
+                validated.prompt,
+            )
+            calls.append(validated)
         except ProjectError as exc:
             raise DecodingError(
                 f"prompt {prompt_index} ({prompt!r}) failed: {exc}"

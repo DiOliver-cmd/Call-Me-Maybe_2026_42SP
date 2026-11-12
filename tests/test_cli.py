@@ -10,7 +10,7 @@ from src.schemas import FunctionCall
 
 _DEFAULT_FUNCTIONS = "data/input/functions_definition.json"
 _DEFAULT_INPUT = "data/input/function_calling_tests.json"
-_DEFAULT_OUTPUT = "data/output/function_calling_results.json"
+_DEFAULT_OUTPUT = "data/output/function_calls.json"
 
 
 def _calls() -> list[FunctionCall]:

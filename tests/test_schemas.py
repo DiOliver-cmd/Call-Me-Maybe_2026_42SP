@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.errors import SchemaError
-from src.schemas import FunctionCall, FunctionCatalog
+from src.schemas import FunctionCall, FunctionCallBatch, FunctionCatalog
 
 DATA_FILE = (
     Path(__file__).resolve().parents[1]
@@ -50,6 +50,7 @@ def _validation_catalog() -> FunctionCatalog:
         [
             _function_with("fn_text", {"text": {"type": "string"}}),
             _function_with("fn_number", {"value": {"type": "number"}}),
+            _function_with("fn_integer", {"value": {"type": "integer"}}),
             _function_with("fn_flag", {"enabled": {"type": "boolean"}}),
             _function_with("fn_zero", {}),
         ]
@@ -240,3 +241,106 @@ def test_validate_call_rejects_str_for_boolean() -> None:
         ),
     ):
         catalog.validate_call(call)
+
+
+def test_validate_call_normalizes_int_number_to_float() -> None:
+    catalog = _validation_catalog()
+    call = FunctionCall(
+        prompt="prompt",
+        name="fn_number",
+        parameters={"value": 2},
+    )
+
+    assert catalog.validate_call(call) is call
+    assert call.parameters["value"] == 2.0
+    assert type(call.parameters["value"]) is float
+
+
+def test_validate_against_normalizes_int_number_to_float() -> None:
+    catalog = _validation_catalog()
+    function = catalog.by_name("fn_number")
+    call = FunctionCall(
+        prompt="prompt",
+        name="fn_number",
+        parameters={"value": 2},
+    )
+
+    assert call.validate_against(function) is call
+    assert call.parameters["value"] == 2.0
+    assert type(call.parameters["value"]) is float
+
+
+def test_validate_call_keeps_float_number_unchanged() -> None:
+    catalog = _validation_catalog()
+    call = FunctionCall(
+        prompt="prompt",
+        name="fn_number",
+        parameters={"value": 2.5},
+    )
+
+    assert catalog.validate_call(call) is call
+    assert call.parameters["value"] == 2.5
+    assert type(call.parameters["value"]) is float
+
+
+def test_validate_call_keeps_integer_as_int() -> None:
+    catalog = _validation_catalog()
+    call = FunctionCall(
+        prompt="prompt",
+        name="fn_integer",
+        parameters={"value": 2},
+    )
+
+    assert catalog.validate_call(call) is call
+    assert call.parameters["value"] == 2
+    assert type(call.parameters["value"]) is int
+
+
+def test_validate_against_keeps_integer_as_int() -> None:
+    catalog = _validation_catalog()
+    function = catalog.by_name("fn_integer")
+    call = FunctionCall(
+        prompt="prompt",
+        name="fn_integer",
+        parameters={"value": 2},
+    )
+
+    assert call.validate_against(function) is call
+    assert call.parameters["value"] == 2
+    assert type(call.parameters["value"]) is int
+
+
+def test_validate_against_rejects_bool_for_number() -> None:
+    catalog = _validation_catalog()
+    function = catalog.by_name("fn_number")
+    call = FunctionCall(
+        prompt="prompt",
+        name="fn_number",
+        parameters={"value": True},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"parameter 'value' of function 'fn_number' expects "
+            r"a number \(int or float, not bool\), got bool"
+        ),
+    ):
+        call.validate_against(function)
+
+
+def test_normalized_number_serializes_with_decimal_point() -> None:
+    catalog = _validation_catalog()
+    call = FunctionCall(
+        prompt="prompt",
+        name="fn_number",
+        parameters={"value": 2},
+    )
+    catalog.validate_call(call)
+
+    payload = FunctionCallBatch.from_calls([call]).model_dump()
+
+    assert json.dumps(payload) == json.dumps(
+        [{"prompt": "prompt", "name": "fn_number", "parameters": {"value": 2.0}}]
+    )
+    assert '"value": 2.0' in json.dumps(payload)

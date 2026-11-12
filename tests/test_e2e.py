@@ -17,9 +17,9 @@ def test_run_fake_writes_expected_sum_call(tmp_path: Path) -> None:
     call = calls[0]
     assert call.prompt == FAKE_PROMPT
     assert call.name == "fn_add_numbers"
-    assert call.parameters == {"a": 2, "b": 3}
-    assert type(call.parameters["a"]) is int
-    assert type(call.parameters["b"]) is int
+    assert call.parameters == {"a": 2.0, "b": 3.0}
+    assert type(call.parameters["a"]) is float
+    assert type(call.parameters["b"]) is float
 
     assert output.exists()
     payload = json.loads(output.read_text(encoding="utf-8"))
@@ -27,6 +27,6 @@ def test_run_fake_writes_expected_sum_call(tmp_path: Path) -> None:
         {
             "prompt": FAKE_PROMPT,
             "name": "fn_add_numbers",
-            "parameters": {"a": 2, "b": 3},
+            "parameters": {"a": 2.0, "b": 3.0},
         }
     ]

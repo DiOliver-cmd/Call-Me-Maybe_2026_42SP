@@ -17,13 +17,13 @@ Examples::
 
     # Report from the saved production output (T8.4) and its measured runtime.
     uv run python -m experiments.metrics \\
-        --output data/output/function_calling_results.json \\
+        --output data/output/function_calls.json \\
         --runtime-seconds 180.24 \\
         --report experiments/report.md
 
     # Re-run the real pipeline, write a fresh output and measure the runtime.
     uv run python -m experiments.metrics --run-real \\
-        --output data/output/function_calling_results.json \\
+        --output data/output/function_calls.json \\
         --report experiments/report.md
 
     # Deterministic fake batch, no model.
@@ -57,7 +57,7 @@ __all__ = [
 
 FUNCTIONS = Path("data/input/functions_definition.json")
 PROMPTS = Path("data/input/function_calling_tests.json")
-OUTPUT = Path("data/output/function_calling_results.json")
+OUTPUT = Path("data/output/function_calls.json")
 
 
 @dataclass
@@ -236,13 +236,13 @@ def render_report(
             "```bash",
             "# Score the saved production output without loading the model.",
             "uv run python -m experiments.metrics \\",
-            "  --output data/output/function_calling_results.json \\",
+            "  --output data/output/function_calls.json \\",
             "  --runtime-seconds 180.24 \\",
             "  --report experiments/report.md",
             "",
             "# Re-run the real pipeline and measure the runtime.",
             "uv run python -m experiments.metrics --run-real \\",
-            "  --output data/output/function_calling_results.json \\",
+            "  --output data/output/function_calls.json \\",
             "  --report experiments/report.md",
             "",
             "# Deterministic fake batch (no model).",

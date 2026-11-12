@@ -94,8 +94,11 @@ from __future__ import annotations
 import copy
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
 from enum import Enum, auto
+from typing import Annotated
+
+from pydantic import BeforeValidator, ConfigDict
+from pydantic.dataclasses import dataclass
 
 __all__ = [
     "DFA",
@@ -242,11 +245,26 @@ class DFAState(Enum):
     ACCEPT = auto()
 
 
-@dataclass
+def _validate_state(value: object) -> DFAState:
+    """Keep the historical ``TypeError`` for a non-:class:`DFAState` value.
+
+    Pydantic would otherwise wrap this in a ``ValidationError`` before
+    ``__post_init__`` runs, which would change the public error contract.
+    """
+    if not isinstance(value, DFAState):
+        raise TypeError(
+            f"state must be a DFAState, got {type(value).__name__}"
+        )
+    return value
+
+
+@dataclass(config=ConfigDict(arbitrary_types_allowed=True))
 class DFA:
     """The state of one in-progress output-template parse."""
 
-    state: DFAState = DFAState.START
+    state: Annotated[DFAState, BeforeValidator(_validate_state)] = (
+        DFAState.START
+    )
     names: NameMatcher | None = None
     name_buffer: str = ""
     number_buffer: str = ""

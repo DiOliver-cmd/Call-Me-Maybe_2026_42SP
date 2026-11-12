@@ -19,7 +19,7 @@ Ground truth decisions:
 
 Run with::
 
-    uv run python -m experiments.accuracy --score-only data/output/function_calling_results.json
+    uv run python -m experiments.accuracy --score-only data/output/function_calls.json
     uv run python -m experiments.accuracy --prompt values
     uv run python -m experiments.accuracy --prompt values --indices 5,8,9,10,14,15
 
